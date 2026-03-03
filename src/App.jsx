@@ -444,7 +444,7 @@ export default function App() {
   const stats = {
     total: filtered.length,
     fixed: filtered.filter((r, i) => statuses[makeKey(r, rawData.indexOf(r))] === "fixed").length,
-    inProgress: filtered.filter((r, i) => statuses[makeKey(r, rawData.indexOf(r))] === "in_progress").length,
+
     disputed: filtered.filter((r, i) => statuses[makeKey(r, rawData.indexOf(r))] === "disputed").length,
     open: filtered.filter((r, i) => !statuses[makeKey(r, rawData.indexOf(r))] || statuses[makeKey(r, rawData.indexOf(r))] === "open").length,
   };
@@ -917,7 +917,6 @@ export default function App() {
           <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
             {[
               { label: "Open", val: stats.open, color: "#6b7280", bg: "#f3f4f6" },
-              { label: "In Progress", val: stats.inProgress, color: "#d97706", bg: "#fef3c7" },
               { label: "Disputed", val: stats.disputed, color: "#dc2626", bg: "#fee2e2" },
               { label: "Fixed", val: stats.fixed, color: "#16a34a", bg: "#dcfce7" },
             ].map(s => (
@@ -969,7 +968,7 @@ export default function App() {
                   const status = statuses[key] || "open";
                   const note = notes[key] || "";
                   const catStyle = CATEGORY_COLORS[row.category] || { bg: "#f9fafb", text: "#374151", border: "#e5e7eb" };
-                  const rowBg = status === "fixed" ? "#f0fdf4" : status === "disputed" ? "#fff8f8" : status === "in_progress" ? "#fffbf0" : "white";
+                  const rowBg = status === "fixed" ? "#f0fdf4" : status === "disputed" ? "#fff8f8" : "white";
                   return (
                     <tr key={key + i} className="error-row" style={{ borderBottom: "1px solid #f1f5f9", background: rowBg, transition: "background 0.1s" }}>
                       <td style={{ padding: "10px 16px", fontWeight: 500, color: "#1e293b", whiteSpace: "nowrap" }}>{row.name}</td>
