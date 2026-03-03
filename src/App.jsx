@@ -12,7 +12,6 @@ const DEFAULT_DATA = [];
 
 const STATUS_OPTIONS = [
   { value: "fixed", label: "Fixed", icon: "✅", color: "#16a34a", bg: "#dcfce7", border: "#86efac" },
-  { value: "in_progress", label: "In Progress", icon: "🔄", color: "#d97706", bg: "#fef3c7", border: "#fcd34d" },
   { value: "disputed", label: "Not My Error", icon: "❌", color: "#dc2626", bg: "#fee2e2", border: "#fca5a5" },
   { value: "open", label: "Open", icon: "⚪", color: "#6b7280", bg: "#f3f4f6", border: "#d1d5db" },
 ];
@@ -256,6 +255,15 @@ export default function App() {
       clearInterval(interval);
     };
   }, [isAuthenticated]);
+
+  const handleLogout = () => {
+    localStorage.removeItem("ecs_auth");
+    localStorage.removeItem("ecs_last_active");
+    localStorage.removeItem("ecs_role");
+    setIsAuthenticated(false);
+    setIsAdmin(false);
+    setActiveTab("home");
+  };
 
   const handleLogin = () => {
     if (loginPassword === ADMIN_PASSWORD) {
@@ -536,6 +544,21 @@ export default function App() {
               {id === "home" ? "Home" : "Help & FAQ"}
             </button>
           ))}
+          {isAdmin && (
+            <button className="nav-btn" onClick={() => setActiveTab("admin")}
+              style={{ background: activeTab === "admin" ? "rgba(255,255,255,0.15)" : "none", border: "none",
+                color: activeTab === "admin" ? "white" : "rgba(255,255,255,0.6)",
+                fontSize: 13, fontWeight: 500, fontFamily: "inherit",
+                padding: "7px 14px", borderRadius: 8, cursor: "pointer" }}>
+              Admin
+            </button>
+          )}
+          <button className="nav-btn" onClick={handleLogout}
+            style={{ background: "none", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 8,
+              color: "rgba(255,255,255,0.7)", fontSize: 13, fontWeight: 500, fontFamily: "inherit",
+              padding: "6px 14px", cursor: "pointer", marginLeft: 4 }}>
+            Log Out
+          </button>
         </div>
       </div>
 
