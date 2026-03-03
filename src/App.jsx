@@ -12,7 +12,7 @@ const DEFAULT_DATA = [];
 
 const STATUS_OPTIONS = [
   { value: "fixed", label: "Fixed", icon: "✅", color: "#16a34a", bg: "#dcfce7", border: "#86efac" },
-  { value: "disputed", label: "Not My Error", icon: "❌", color: "#dc2626", bg: "#fee2e2", border: "#fca5a5" },
+  { value: "disputed", label: "Not an Error", icon: "❌", color: "#dc2626", bg: "#fee2e2", border: "#fca5a5" },
   { value: "open", label: "Open", icon: "⚪", color: "#6b7280", bg: "#f3f4f6", border: "#d1d5db" },
 ];
 
@@ -671,7 +671,7 @@ export default function App() {
 
           {[
             { section: "Error Tracker", items: [
-              { q: "What do the error statuses mean?", a: (<ul style={{ paddingLeft: 18, marginTop: 6 }}><li style={{ marginBottom: 4 }}><strong>Open</strong> — Not yet reviewed. Default for all new errors.</li><li style={{ marginBottom: 4 }}><strong>In Progress</strong> — You are actively working on resolving this.</li><li style={{ marginBottom: 4 }}><strong>Not My Error</strong> — Reviewed and disputed or not applicable.</li><li style={{ marginBottom: 4 }}><strong>Fixed</strong> — Resolved and corrected.</li></ul>) },
+              { q: "What do the error statuses mean?", a: (<ul style={{ paddingLeft: 18, marginTop: 6 }}><li style={{ marginBottom: 4 }}><strong>Open</strong> — Not yet reviewed. Default for all new errors.</li><li style={{ marginBottom: 4 }}><strong>In Progress</strong> — You are actively working on resolving this.</li><li style={{ marginBottom: 4 }}><strong>Not an Error</strong> — Reviewed and disputed or not applicable.</li><li style={{ marginBottom: 4 }}><strong>Fixed</strong> — Resolved and corrected.</li></ul>) },
             ]},
             { section: "Saturday Calculator", items: [
               { q: "How do I use the Saturday Calculator?", a: (<ul style={{ paddingLeft: 18, marginTop: 6 }}><li style={{ marginBottom: 4 }}>Select your center — rates load automatically.</li><li style={{ marginBottom: 4 }}>Enter A, B, C, and C+ acuity client counts.</li><li style={{ marginBottom: 4 }}>Minimum required staff calculates automatically.</li><li style={{ marginBottom: 4 }}>Add extra staff if needed. Salary staff count toward ratio but not cost.</li><li style={{ marginBottom: 4 }}>Result shows ✅ Good to Go or ❌ Not Viable.</li></ul>) },
