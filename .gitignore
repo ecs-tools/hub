@@ -25,3 +25,7 @@ dist-ssr
 
 # Installers and binaries
 *.exe
+
+# Environment variables — never commit these
+.env
+.env.*
