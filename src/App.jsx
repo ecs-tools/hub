@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import * as XLSX from "https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs";
 
 const UPLOAD_PASSWORD = import.meta.env.VITE_UPLOAD_PASSWORD;
@@ -30,6 +30,26 @@ function makeKey(row, idx) {
   return `${row.location}-${row.name}-${row.date}-${idx}`;
 }
 
+function centerName(location) {
+  return location ? location.split(" ")[0] : "";
+}
+
+function progressColor(pct) {
+  if (pct <= 50) {
+    const t = pct / 50;
+    const r = Math.round(239 + (234 - 239) * t);
+    const g = Math.round(68 + (179 - 68) * t);
+    const b = Math.round(68 + (8 - 68) * t);
+    return `rgb(${r},${g},${b})`;
+  } else {
+    const t = (pct - 50) / 50;
+    const r = Math.round(234 + (34 - 234) * t);
+    const g = Math.round(179 + (197 - 179) * t);
+    const b = Math.round(8 + (94 - 8) * t);
+    return `rgb(${r},${g},${b})`;
+  }
+}
+
 function parseExcelDate(val) {
   if (!val) return "";
   if (typeof val === "number") {
@@ -53,9 +73,11 @@ function categorizeReason(reason) {
   if (!reason) return "Other";
   const r = String(reason).toLowerCase();
   if (r.includes("not found in attendance") || r.includes("transported but not found")) return "Not Found in Attendance";
-  if (r.includes("arrival time is before pickup")) return "Arrival Before Pickup";
+  if (r.includes("nmt without adult day")) return "Transport Violation";
+  if (r.includes("units billed")) return "Invalid Units";
+  if (r.includes("arrival time is before pickup") || r.includes("before pickup end")) return "Arrival Before Pickup";
   if (r.includes("bus ended") && r.includes("checked in")) return "Bus/Check-in Time Mismatch";
-  if (r.includes("takehome")) return "Takehome Time Mismatch";
+  if (r.includes("takehome") || r.includes("bus departure")) return "Takehome Time Mismatch";
   if (r.includes("pickup start missing") || r.includes("pickup end exists")) return "Missing Pickup Time";
   if (r.includes("goal documentation")) return "Missing Goal Documentation";
   if (r.includes("invalid")) return "Invalid Time";
@@ -128,6 +150,8 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState("All Types");
   const [statuses, setStatuses] = useState({});
   const [notes, setNotes] = useState({});
+  const [flags, setFlags] = useState({});
+  const [lastUpdated, setLastUpdated] = useState(null);
   const [expandedNote, setExpandedNote] = useState(null);
   const [noteInput, setNoteInput] = useState("");
   const [saving, setSaving] = useState(false);
@@ -189,7 +213,7 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
 
-  const locations = ["All Centers", ...Array.from(new Set(rawData.map(r => r.location))).sort()];
+  const locations = ["All Centers", ...Array.from(new Set(rawData.map(r => centerName(r.location)))).filter(Boolean).sort()];
   const categories = ["All Types", ...Array.from(new Set(rawData.map(r => r.category))).filter(Boolean).sort()];
 
   useEffect(() => {
@@ -199,15 +223,19 @@ export default function App() {
         const res = await fetch(SHEET_URL);
         const rows = await res.json();
         if (Array.isArray(rows)) {
-          const s = {}, n = {};
+          const s = {}, n = {}, f = {};
           rows.forEach(row => {
-            if (row.key) {
+            if (row.key === "__meta__") {
+              if (row.updatedAt) setLastUpdated(row.updatedAt);
+            } else if (row.key) {
               if (row.status) s[row.key] = row.status;
               if (row.note) n[row.key] = row.note;
+              if (row.flag === "true") f[row.key] = true;
             }
           });
           setStatuses(s);
           setNotes(n);
+          setFlags(f);
         }
       } catch (e) {}
 
@@ -355,8 +383,16 @@ export default function App() {
 
       // Clear statuses and notes since it's a new week
       await fetch(SHEET_URL + "/all", { method: "DELETE" });
+      const uploadedAt = new Date().toISOString();
+      await fetch(SHEET_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: { key: "__meta__", updatedAt: uploadedAt } }),
+      });
+      setLastUpdated(uploadedAt);
       setStatuses({});
       setNotes({});
+      setFlags({});
       setRawData(newData);
       setSelectedCenter("All Centers");
       setSelectedCategory("All Types");
@@ -370,9 +406,8 @@ export default function App() {
     setUploading(false);
   };
 
-  const saveStatus = useCallback(async (key, value, currentStatuses) => {
-    const updated = { ...currentStatuses, [key]: value };
-    setStatuses(updated);
+  const saveStatus = useCallback(async (key, value) => {
+    setStatuses(prev => ({ ...prev, [key]: value }));
     setSaving(true);
     try {
       const checkRes = await fetch(`${SHEET_URL}/search?key=${encodeURIComponent(key)}`);
@@ -381,25 +416,22 @@ export default function App() {
         await fetch(`${SHEET_URL}/key/${encodeURIComponent(key)}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: { status: value, note: notes[key] || "" } }),
+          body: JSON.stringify({ data: { status: value, note: notes[key] || "", flag: String(flags[key] || false) } }),
         });
       } else {
         await fetch(SHEET_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: { key, status: value, note: notes[key] || "", updatedAt: new Date().toISOString() } }),
+          body: JSON.stringify({ data: { key, status: value, note: notes[key] || "", flag: "false", updatedAt: new Date().toISOString() } }),
         });
       }
       showToast("Saved");
-    } catch (e) {
-      showToast("Save failed");
-    }
+    } catch (e) { showToast("Save failed"); }
     setSaving(false);
-  }, [notes]);
+  }, [notes, flags]);
 
-  const saveNote = useCallback(async (key, value, currentNotes) => {
-    const updated = { ...currentNotes, [key]: value };
-    setNotes(updated);
+  const saveNote = useCallback(async (key, value) => {
+    setNotes(prev => ({ ...prev, [key]: value }));
     try {
       const checkRes = await fetch(`${SHEET_URL}/search?key=${encodeURIComponent(key)}`);
       const checkData = await checkRes.json();
@@ -407,19 +439,40 @@ export default function App() {
         await fetch(`${SHEET_URL}/key/${encodeURIComponent(key)}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: { note: value, status: statuses[key] || "open" } }),
+          body: JSON.stringify({ data: { note: value, status: statuses[key] || "open", flag: String(flags[key] || false) } }),
         });
       } else {
         await fetch(SHEET_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: { key, status: statuses[key] || "open", note: value, updatedAt: new Date().toISOString() } }),
+          body: JSON.stringify({ data: { key, status: statuses[key] || "open", note: value, flag: "false", updatedAt: new Date().toISOString() } }),
         });
       }
     } catch (e) {}
     showToast("Note saved");
-    setExpandedNote(null);
-  }, [statuses]);
+  }, [statuses, flags]);
+
+  const saveFlag = useCallback(async (key) => {
+    const newFlag = !(flags[key] ?? false);
+    setFlags(prev => ({ ...prev, [key]: newFlag }));
+    try {
+      const checkRes = await fetch(`${SHEET_URL}/search?key=${encodeURIComponent(key)}`);
+      const checkData = await checkRes.json();
+      if (Array.isArray(checkData) && checkData.length > 0) {
+        await fetch(`${SHEET_URL}/key/${encodeURIComponent(key)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ data: { flag: String(newFlag), status: statuses[key] || "open", note: notes[key] || "" } }),
+        });
+      } else {
+        await fetch(SHEET_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ data: { key, status: statuses[key] || "open", note: notes[key] || "", flag: String(newFlag), updatedAt: new Date().toISOString() } }),
+        });
+      }
+    } catch (e) {}
+  }, [flags, statuses, notes]);
 
   const handleSort = (field) => {
     if (sortField === field) {
@@ -430,11 +483,19 @@ export default function App() {
     }
   };
 
+  const effStatus = (key) => statuses[key] ?? "open";
+  const effFlag = (key) => flags[key] ?? false;
+
   const filtered = rawData.filter(row => {
-    const locMatch = selectedCenter === "All Centers" || row.location === selectedCenter;
+    const locMatch = selectedCenter === "All Centers" || centerName(row.location) === selectedCenter;
     const catMatch = selectedCategory === "All Types" || row.category === selectedCategory;
     return locMatch && catMatch;
   }).sort((a, b) => {
+    const aKey = makeKey(a, rawData.indexOf(a));
+    const bKey = makeKey(b, rawData.indexOf(b));
+    const aResolved = effStatus(aKey) !== "open";
+    const bResolved = effStatus(bKey) !== "open";
+    if (aResolved !== bResolved) return aResolved ? 1 : -1;
     if (!sortField) return 0;
     let aVal = a[sortField], bVal = b[sortField];
     const cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
@@ -443,11 +504,25 @@ export default function App() {
 
   const stats = {
     total: filtered.length,
-    fixed: filtered.filter((r, i) => statuses[makeKey(r, rawData.indexOf(r))] === "fixed").length,
-
-    disputed: filtered.filter((r, i) => statuses[makeKey(r, rawData.indexOf(r))] === "disputed").length,
-    open: filtered.filter((r, i) => !statuses[makeKey(r, rawData.indexOf(r))] || statuses[makeKey(r, rawData.indexOf(r))] === "open").length,
+    fixed: filtered.filter(r => effStatus(makeKey(r, rawData.indexOf(r))) === "fixed").length,
+    disputed: filtered.filter(r => effStatus(makeKey(r, rawData.indexOf(r))) === "disputed").length,
+    open: filtered.filter(r => effStatus(makeKey(r, rawData.indexOf(r))) === "open").length,
   };
+
+  const KNOWN_CENTERS = ["Avon", "Beavercreek", "Eastgate", "Englewood", "Fairfield", "Independence", "Lorain", "Parma", "Springboro", "Westwood"];
+
+  const centerStats = useMemo(() => {
+    return KNOWN_CENTERS.map(center => {
+      const rows = rawData.filter(r => centerName(r.location) === center);
+      const total = rows.length;
+      const resolved = rows.filter(r => {
+        const s = statuses[makeKey(r, rawData.indexOf(r))] ?? "open";
+        return s === "fixed" || s === "disputed";
+      }).length;
+      const pct = total > 0 ? Math.round((resolved / total) * 100) : 100;
+      return { center, total, resolved, pct, noErrors: total === 0 };
+    });
+  }, [rawData, statuses]);
 
   const formatDate = (d) => {
     if (!d) return "";
@@ -726,6 +801,11 @@ export default function App() {
               <div style={{ background: "#f1f5f9", borderRadius: 8, padding: "4px 12px", fontSize: 12, color: "#64748b" }}>
                 {stats.open} open · {stats.fixed} fixed
               </div>
+              {lastUpdated && (
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>
+                  Report updated {new Date(lastUpdated).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} at {new Date(lastUpdated).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -898,6 +978,30 @@ export default function App() {
       )}
 
       {activeTab === "tracker" && <div style={{ padding: "24px 32px" }}>
+        {/* Center Progress Bar Row */}
+        {centerStats.length > 0 && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 20, overflowX: "auto", paddingBottom: 4 }}>
+            {centerStats.map(({ center, total, resolved, pct, noErrors }) => {
+              const color = progressColor(pct);
+              const isActive = selectedCenter === center;
+              return (
+                <div key={center} onClick={() => setSelectedCenter(isActive ? "All Centers" : center)}
+                  style={{ flex: "0 0 auto", cursor: "pointer", background: "white", border: `1.5px solid ${isActive ? color : "#e2e8f0"}`,
+                    borderRadius: 8, padding: "6px 10px", minWidth: 90, boxShadow: isActive ? `0 0 0 2px ${color}40` : "none",
+                    transition: "all 0.15s" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#374151", marginBottom: 4, whiteSpace: "nowrap" }}>{center}</div>
+                  <div style={{ background: "#f1f5f9", borderRadius: 100, height: 5, overflow: "hidden", marginBottom: 3 }}>
+                    <div style={{ height: "100%", borderRadius: 100, width: `${pct}%`, background: color, transition: "width 0.4s ease" }} />
+                  </div>
+                  <div style={{ fontSize: 10, color: noErrors ? "#16a34a" : "#94a3b8", fontWeight: noErrors ? 600 : 400, whiteSpace: "nowrap" }}>
+                    {noErrors ? "✓ No Errors" : `${resolved}/${total} · ${pct}%`}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* Filters */}
         <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
           <div>
@@ -914,7 +1018,7 @@ export default function App() {
               {categories.map(c => <option key={c}>{c}</option>)}
             </select>
           </div>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             {[
               { label: "Open", val: stats.open, color: "#6b7280", bg: "#f3f4f6" },
               { label: "Disputed", val: stats.disputed, color: "#dc2626", bg: "#fee2e2" },
@@ -965,14 +1069,16 @@ export default function App() {
               <tbody>
                 {filtered.map((row, i) => {
                   const key = makeKey(row, rawData.indexOf(row));
-                  const status = statuses[key] || "open";
-                  const note = notes[key] || "";
+                  const status = effStatus(key);
+                  const note = notes[key] ?? "";
+                  const flagged = effFlag(key);
                   const catStyle = CATEGORY_COLORS[row.category] || { bg: "#f9fafb", text: "#374151", border: "#e5e7eb" };
                   const rowBg = status === "fixed" ? "#f0fdf4" : status === "disputed" ? "#fff8f8" : "white";
                   return (
-                    <tr key={key + i} className="error-row" style={{ borderBottom: "1px solid #f1f5f9", background: rowBg, transition: "background 0.1s" }}>
+                    <tr key={key + i} className="error-row" style={{ borderBottom: "1px solid #f1f5f9", background: rowBg,
+                      transition: "background 0.1s" }}>
                       <td style={{ padding: "10px 16px", fontWeight: 500, color: "#1e293b", whiteSpace: "nowrap" }}>{row.name}</td>
-                      <td style={{ padding: "10px 16px", color: "#475569", whiteSpace: "nowrap" }}>{row.location}</td>
+                      <td style={{ padding: "10px 16px", color: "#475569", whiteSpace: "nowrap" }}>{centerName(row.location)}</td>
                       <td style={{ padding: "10px 16px", color: "#475569", fontFamily: "\'DM Mono\', monospace", fontSize: 12, whiteSpace: "nowrap" }}>{formatDate(row.date)}</td>
                       <td style={{ padding: "10px 16px", color: "#374151", minWidth: 260, maxWidth: 400, whiteSpace: "normal", wordBreak: "break-word" }}>
                         {row.reason}
@@ -983,15 +1089,22 @@ export default function App() {
                         </span>
                       </td>
                       <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>
-                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
                           {STATUS_OPTIONS.map(opt => (
                             <button key={opt.value} className={`status-btn ${status === opt.value ? "active" : ""}`}
-                              onClick={() => saveStatus(key, opt.value, statuses)}
+                              onClick={() => saveStatus(key, opt.value)}
                               style={{ background: status === opt.value ? opt.bg : "white", color: status === opt.value ? opt.color : "#9ca3af",
                                 borderColor: status === opt.value ? opt.border : "#e5e7eb", opacity: status === opt.value ? 1 : 0.7 }}>
                               {opt.icon} {opt.label}
                             </button>
                           ))}
+                          <button onClick={() => saveFlag(key)}
+                            title={flagged ? "Remove flag" : "Flag this row"}
+                            style={{ background: flagged ? "#fef2f2" : "white", color: flagged ? "#dc2626" : "#d1d5db",
+                              border: `1.5px solid ${flagged ? "#fca5a5" : "#e5e7eb"}`, borderRadius: 6,
+                              padding: "3px 7px", fontSize: 13, cursor: "pointer", lineHeight: 1, transition: "all 0.15s" }}>
+                            🚩
+                          </button>
                         </div>
                       </td>
                       <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>
@@ -1034,7 +1147,7 @@ export default function App() {
               style={{ width: "100%", border: "1.5px solid #3b82f6", borderRadius: 8, padding: "10px 12px", fontSize: 14, resize: "vertical", fontFamily: "inherit", boxSizing: "border-box" }}
             />
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              <button onClick={() => { saveNote(noteModal.key, noteInput !== undefined ? noteInput : noteModal.note, notes); setNoteModal(null); }}
+              <button onClick={() => { saveNote(noteModal.key, noteInput !== undefined ? noteInput : noteModal.note); setNoteModal(null); }}
                 style={{ flex: 1, background: "#3b82f6", color: "white", border: "none", borderRadius: 8, padding: "9px", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Save</button>
               <button onClick={() => setNoteModal(null)}
                 style={{ flex: 1, background: "#f1f5f9", color: "#374151", border: "none", borderRadius: 8, padding: "9px", fontSize: 14, cursor: "pointer" }}>Cancel</button>
