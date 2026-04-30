@@ -1,11 +1,28 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import * as XLSX from "https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs";
+import { CENTERS, CENTERS_WITH_ALL } from "./config/centers.js";
+import { CENTER_RATES, ACUITY_RATIOS } from "./config/rates.js";
+import ErrorBoundary from "./components/ErrorBoundary.jsx";
+import FleetDashboard from "./components/FleetDashboard.jsx";
+import UtilizationDashboard from "./components/UtilizationDashboard.jsx";
+import HomeDashboard from "./components/HomeDashboard.jsx";
+import BillingDashboard from "./components/BillingDashboard.jsx";
+
+const MODULES = [
+  { id: "tracker",     name: "Billing Error Detection", description: "Log and track weekly billing errors across transportation and attendance.", available: true },
+  { id: "billing",     name: "Billing Overview",        description: "Weekly, monthly, and total billing metrics.", available: true },
+  { id: "calculator",  name: "Saturday Calculator",     description: "Estimate staffing costs and profitability for Saturday programming.", available: false },
+  { id: "fleet",       name: "Fleet Dashboard",         description: "Monitor vehicle maintenance status and service history.", available: false },
+  { id: "utilization", name: "Utilization Tracker",     description: "Track PAWS funding utilization and alert when clients approach limits.", available: false },
+];
 
 const UPLOAD_PASSWORD = import.meta.env.VITE_UPLOAD_PASSWORD;
 const SHEET_URL = "https://sheetdb.io/api/v1/t91e5epi82udj";
-const APP_PASSWORD = import.meta.env.VITE_APP_PASSWORD;
-const ADMIN_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD;
-const INACTIVITY_TIMEOUT = 60 * 60 * 1000; // 1 hour in ms
+// Auth is now handled by the FastAPI backend (JWT cookie).
+// VITE_APP_PASSWORD and VITE_ADMIN_PASSWORD are no longer used here.
+const API_BASE = import.meta.env.VITE_API_BASE || "https://web-production-3b1f4.up.railway.app";
+const INACTIVITY_TIMEOUT = 60 * 60 * 1000;
+const ADMIN_TIMEOUT = 4 * 60 * 60 * 1000;
 const LOGO = "data:image/png;base64,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";
 
 const DEFAULT_DATA = [];
@@ -84,31 +101,6 @@ function categorizeReason(reason) {
   return "Other";
 }
 
-function getWeekLabel(data) {
-  const dates = data.map(r => r.date).filter(Boolean).sort();
-  if (!dates.length) return "";
-
-  const fmt = (date) => {
-    const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-    return `${months[date.getUTCMonth()]} ${date.getUTCDate()}, ${date.getUTCFullYear()}`;
-  };
-
-  // Find the earliest date in the data
-  const earliest = new Date(dates[0] + "T00:00:00Z");
-
-  // Walk back to Monday (getUTCDay: 0=Sun, 1=Mon ... 6=Sat)
-  const day = earliest.getUTCDay();
-  const daysToMonday = day === 0 ? 6 : day - 1;
-  const monday = new Date(earliest);
-  monday.setUTCDate(monday.getUTCDate() - daysToMonday);
-
-  // Sunday is 6 days after Monday
-  const sunday = new Date(monday);
-  sunday.setUTCDate(sunday.getUTCDate() + 6);
-
-  return `${fmt(monday)} – ${fmt(sunday)}`;
-}
-
 function FaqItem({ question, answer }) {
   const [open, setOpen] = React.useState(false);
   return (
@@ -130,21 +122,75 @@ function FaqItem({ question, answer }) {
   );
 }
 
+// Placeholder shown to manager-role users on modules that aren't ready yet.
+// Per spec: matches navy/steel palette, includes a construction icon, module
+// name as heading, the standardized "← Back to Home" button, and short copy.
+function UnderConstruction({ moduleName, onBack }) {
+  return (
+    <div className="page-anim" style={{ padding: "32px 40px", maxWidth: 760, margin: "0 auto" }}>
+      <button
+        className="back-btn"
+        onClick={onBack}
+        style={{
+          background: "none",
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          padding: "5px 12px",
+          fontSize: 13,
+          fontWeight: 500,
+          color: "var(--text-2)",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          marginBottom: 24,
+        }}
+      >
+        ← Back to Home
+      </button>
+      <div style={{
+        background: "white",
+        border: "1px solid var(--border)",
+        borderRadius: 12,
+        padding: "56px 48px",
+        textAlign: "center",
+        boxShadow: "0 1px 4px rgba(0,0,0,0.04)",
+      }}>
+        <div style={{ fontSize: 52, marginBottom: 16, lineHeight: 1 }} aria-hidden="true">🚧</div>
+        <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", color: "var(--steel)", marginBottom: 8 }}>
+          Coming Soon
+        </div>
+        <h2 style={{ fontSize: 24, fontWeight: 700, color: "var(--navy)", margin: "0 0 8px", letterSpacing: "-0.4px" }}>
+          {moduleName}
+        </h2>
+        <div style={{ fontSize: 14, color: "var(--text-2)", marginBottom: 14, fontWeight: 500 }}>
+          This module is coming soon.
+        </div>
+        <div style={{ fontSize: 13, color: "var(--muted)", maxWidth: 420, margin: "0 auto", lineHeight: 1.6 }}>
+          We're working on making this available. Check back soon or contact your administrator.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    const auth = localStorage.getItem("ecs_auth");
-    const lastActive = localStorage.getItem("ecs_last_active");
-    if (auth === "true" && lastActive) {
-      const elapsed = Date.now() - parseInt(lastActive);
-      if (elapsed < INACTIVITY_TIMEOUT) return true;
-    }
-    localStorage.removeItem("ecs_auth");
-    localStorage.removeItem("ecs_role");
-    return false;
-  });
-  const [isAdmin, setIsAdmin] = useState(() => localStorage.getItem("ecs_role") === "admin");
+  // Auth state: null = "not yet checked", false = "not logged in", true = "logged in".
+  // On mount we call GET /auth/me to see if the browser already has a valid JWT cookie.
+  const [isAuthenticated, setIsAuthenticated] = useState(null);
+  const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
-  const [loginError, setLoginError] = useState(false);
+  const [loginError, setLoginError] = useState("");
+
+  // Registration form state
+  const [showRegister, setShowRegister] = useState(false);
+  const [regInviteCode, setRegInviteCode] = useState("");
+  const [regUsername, setRegUsername] = useState("");
+  const [regPassword, setRegPassword] = useState("");
+  const [regConfirm, setRegConfirm] = useState("");
+  const [regError, setRegError] = useState("");
+  const [regLoading, setRegLoading] = useState(false);
   const [rawData, setRawData] = useState(DEFAULT_DATA);
   const [selectedCenter, setSelectedCenter] = useState("All Centers");
   const [selectedCategory, setSelectedCategory] = useState("All Types");
@@ -152,7 +198,6 @@ export default function App() {
   const [notes, setNotes] = useState({});
   const [flags, setFlags] = useState({});
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [expandedNote, setExpandedNote] = useState(null);
   const [noteInput, setNoteInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -161,6 +206,7 @@ export default function App() {
   const [sortDir, setSortDir] = useState("asc");
   const [noteModal, setNoteModal] = useState(null); // { key, note }
   const [activeTab, setActiveTab] = useState("home");
+  const [userRole, setUserRole] = useState("manager");
 
   // Saturday Calculator state
   const [calcCenter, setCalcCenter] = useState("");
@@ -168,24 +214,11 @@ export default function App() {
   const [calcExtra, setCalcExtra] = useState(0);
   const [calcSalary, setCalcSalary] = useState(0);
 
-  const CALC_CENTERS = {
-    "Beavercreek":  { A: 59.00, B: 106.00, C: 176.75 },
-    "Englewood":    { A: 59.00, B: 106.00, C: 176.75 },
-    "Avon":         { A: 59.50, B: 107.00, C: 178.75 },
-    "Eastgate":     { A: 59.50, B: 107.00, C: 178.75 },
-    "Lorain":       { A: 59.50, B: 107.00, C: 178.75 },
-    "Parma":        { A: 60.25, B: 108.00, C: 180.50 },
-    "Springboro":   { A: 60.25, B: 108.00, C: 180.50 },
-    "Fairfield":    { A: 60.25, B: 108.00, C: 180.50 },
-    "Independence": { A: 60.25, B: 108.00, C: 180.50 },
-    "Westwood":     { A: 60.75, B: 109.00, C: 182.25 },
-  };
   const CALC_OVERHEAD = 250;
   const CALC_MIN_PROFIT = 500;
   const CALC_THRESHOLD = 750;
   const CALC_STAFF_COST = 17 * 7;
-  const CALC_RATIOS = { A: 10, B: 6, C: 3, CP: 1 };
-  const calcRates = calcCenter ? CALC_CENTERS[calcCenter] : null;
+  const calcRates = calcCenter ? CENTER_RATES[calcCenter] : null;
   const calcResult = (() => {
     if (!calcRates) return null;
     const cA = parseInt(calcCounts.A) || 0;
@@ -194,7 +227,7 @@ export default function App() {
     const cCP = parseInt(calcCounts.CP) || 0;
     const total = cA + cB + cC + cCP;
     if (total === 0) return null;
-    const minStaff = Math.ceil(cA / CALC_RATIOS.A) + Math.ceil(cB / CALC_RATIOS.B) + Math.ceil(cC / CALC_RATIOS.C) + cCP;
+    const minStaff = Math.ceil(cA / ACUITY_RATIOS.A) + Math.ceil(cB / ACUITY_RATIOS.B) + Math.ceil(cC / ACUITY_RATIOS.C) + cCP;
     const totalStaff = minStaff + (parseInt(calcExtra) || 0);
     const salary = parseInt(calcSalary) || 0;
     const hourlyStaff = Math.max(0, totalStaff - salary);
@@ -212,6 +245,7 @@ export default function App() {
   const [passwordOk, setPasswordOk] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
+  const [sheetDbBannerVisible, setSheetDbBannerVisible] = useState(false);
 
   const locations = ["All Centers", ...Array.from(new Set(rawData.map(r => centerName(r.location)))).filter(Boolean).sort()];
   const categories = ["All Types", ...Array.from(new Set(rawData.map(r => r.category))).filter(Boolean).sort()];
@@ -237,7 +271,7 @@ export default function App() {
           setNotes(n);
           setFlags(f);
         }
-      } catch (e) {}
+      } catch { /* ignore */ }
 
       // Load error data from SheetDB — fall back to hardcoded if empty
       try {
@@ -252,67 +286,125 @@ export default function App() {
             category: r.category || "",
           })));
         }
-      } catch (e) {}
+      } catch { /* ignore */ }
 
       setLoaded(true);
     }
     load();
   }, []);
 
-  // Track activity and reset inactivity timer
+  // Inactivity timeout: after 1 hour of no activity, hit /auth/logout so the
+  // cookie is cleared server-side and the user is returned to the login screen.
   useEffect(() => {
     if (!isAuthenticated) return;
-    const updateActivity = () => localStorage.setItem("ecs_last_active", Date.now().toString());
-    updateActivity();
+    let lastActive = Date.now();
+    const updateActivity = () => { lastActive = Date.now(); };
+    const timeoutMs = userRole === "admin" ? ADMIN_TIMEOUT : INACTIVITY_TIMEOUT;
     const events = ["mousedown", "keydown", "touchstart", "scroll"];
     events.forEach(e => window.addEventListener(e, updateActivity));
 
-    const interval = setInterval(() => {
-      const lastActive = parseInt(localStorage.getItem("ecs_last_active") || "0");
-      if (Date.now() - lastActive > INACTIVITY_TIMEOUT) {
-        localStorage.removeItem("ecs_auth");
-        localStorage.removeItem("ecs_last_active");
-        localStorage.removeItem("ecs_role");
+    const interval = setInterval(async () => {
+      if (Date.now() - lastActive > timeoutMs) {
+        await fetch(`${API_BASE}/auth/logout`, { method: "POST", credentials: "include" });
         setIsAuthenticated(false);
-        setIsAdmin(false);
+        setUserRole("manager");
+        setActiveTab("home");
       }
-    }, 30000); // check every 30 seconds
+    }, 30000);
 
     return () => {
       events.forEach(e => window.removeEventListener(e, updateActivity));
       clearInterval(interval);
     };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, userRole]);
 
-  const handleLogout = () => {
-    localStorage.removeItem("ecs_auth");
-    localStorage.removeItem("ecs_last_active");
-    localStorage.removeItem("ecs_role");
+  // SheetDB health check — fire-and-forget on mount
+  useEffect(() => {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 5000);
+    fetch(SHEET_URL, { signal: controller.signal })
+      .then(res => {
+        clearTimeout(tid);
+        if (!res.ok) setSheetDbBannerVisible(true);
+      })
+      .catch(() => {
+        clearTimeout(tid);
+        setSheetDbBannerVisible(true);
+      });
+  }, []);
+
+  // On mount: ask the backend if we already have a valid session cookie.
+  // If yes, we skip the login screen entirely — this is what keeps managers
+  // logged in after Chrome saves their credentials.
+  useEffect(() => {
+    fetch(`${API_BASE}/auth/me`, { credentials: "include" })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data?.username) {
+          setIsAuthenticated(true);
+          setUserRole(data.role || "manager");
+        } else {
+          setIsAuthenticated(false);
+        }
+      })
+      .catch(() => setIsAuthenticated(false));
+  }, []);
+
+  const handleLogout = async () => {
+    await fetch(`${API_BASE}/auth/logout`, { method: "POST", credentials: "include" });
     setIsAuthenticated(false);
-    setIsAdmin(false);
+    setUserRole("manager");
     setActiveTab("home");
   };
 
-  const handleLogin = () => {
-    if (loginPassword === ADMIN_PASSWORD) {
-      localStorage.setItem("ecs_auth", "true");
-      localStorage.setItem("ecs_role", "admin");
-      localStorage.setItem("ecs_last_active", Date.now().toString());
-      setIsAuthenticated(true);
-      setIsAdmin(true);
-      setLoginError(false);
-      setLoginPassword("");
-    } else if (loginPassword === APP_PASSWORD) {
-      localStorage.setItem("ecs_auth", "true");
-      localStorage.setItem("ecs_role", "manager");
-      localStorage.setItem("ecs_last_active", Date.now().toString());
-      setIsAuthenticated(true);
-      setIsAdmin(false);
-      setLoginError(false);
-      setLoginPassword("");
-    } else {
-      setLoginError(true);
+  const handleLogin = async () => {
+    setLoginError("");
+    try {
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        credentials: "include",   // tells browser to accept + store the cookie
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setIsAuthenticated(true);
+        setUserRole(data.role || "manager");
+        setLoginUsername("");
+        setLoginPassword("");
+      } else {
+        setLoginError("Incorrect username or password. Try again.");
+      }
+    } catch {
+      setLoginError("Could not reach the server. Check your connection.");
     }
+  };
+
+  const handleRegister = async () => {
+    setRegError("");
+    if (regPassword !== regConfirm) { setRegError("Passwords do not match."); return; }
+    if (regPassword.length < 8) { setRegError("Password must be at least 8 characters."); return; }
+    if (regUsername.trim().length < 3) { setRegError("Username must be at least 3 characters."); return; }
+    setRegLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/auth/register-self`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invite_code: regInviteCode, username: regUsername.trim(), password: regPassword }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setIsAuthenticated(true);
+        setUserRole(data.role || "manager");
+        setShowRegister(false);
+      } else {
+        setRegError(data.detail || "Registration failed. Try again.");
+      }
+    } catch {
+      setRegError("Could not reach the server. Check your connection.");
+    }
+    setRegLoading(false);
   };
 
   const showToast = (msg) => {
@@ -333,13 +425,14 @@ export default function App() {
     const file = e.target.files[0];
     if (!file) return;
     setUploading(true);
+    let deleteHappened = false;
     try {
       const { read, utils } = await import("https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs");
       const buf = await file.arrayBuffer();
       const wb = read(buf);
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows = utils.sheet_to_json(ws, { defval: "" });
-      
+
       const newData = rows.map(row => {
         const keys = Object.keys(row);
         const nameKey = keys.find(k => /name/i.test(k)) || keys[0];
@@ -362,11 +455,29 @@ export default function App() {
         return;
       }
 
-      // Clear old error_data rows and write new ones
-      await fetch(SHEET_URL + "/all?sheet=error_data", { method: "DELETE" });
-
-      // Write rows in batches of 50 using ?sheet= query param
       const batchSize = 50;
+
+      // Write first batch as a connectivity test — existing data is NOT touched yet.
+      // If this fails, the user can safely re-try without any data loss.
+      const firstRes = await fetch(SHEET_URL + "?sheet=error_data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: newData.slice(0, batchSize) }),
+      });
+      if (!firstRes.ok) {
+        const err = await firstRes.text();
+        console.error("SheetDB write failed: batch 0", err);
+        showToast("Warning: data may not have saved — check console");
+        setUploading(false);
+        return;
+      }
+
+      // First batch confirmed live — now safe to clear the old data.
+      // (The test write above is removed along with the old data.)
+      await fetch(SHEET_URL + "/all?sheet=error_data", { method: "DELETE" });
+      deleteHappened = true;
+
+      // Write all batches (batch 0 included again since DELETE removed it).
       for (let i = 0; i < newData.length; i += batchSize) {
         const batch = newData.slice(i, i + batchSize);
         const res = await fetch(SHEET_URL + "?sheet=error_data", {
@@ -376,12 +487,14 @@ export default function App() {
         });
         if (!res.ok) {
           const err = await res.text();
-          console.error("SheetDB write failed:", i, err);
-          showToast("Warning: data may not have saved — check console");
+          console.error(`SheetDB write failed: batch ${Math.floor(i / batchSize)}`, err);
+          showToast("Upload failed mid-way — your error data may be incomplete. Please re-upload the file.");
+          setUploading(false);
+          return;
         }
       }
 
-      // Clear statuses and notes since it's a new week
+      // All batches succeeded — clear statuses/notes and write __meta__.
       await fetch(SHEET_URL + "/all", { method: "DELETE" });
       const uploadedAt = new Date().toISOString();
       await fetch(SHEET_URL, {
@@ -401,7 +514,12 @@ export default function App() {
       setUploadPassword("");
       showToast(`✅ Loaded ${newData.length} errors from ${file.name}`);
     } catch (err) {
-      showToast("Error reading file — make sure it\'s a valid .xlsx");
+      console.error("Upload error:", err);
+      if (deleteHappened) {
+        showToast("Upload failed mid-way — your error data may be incomplete. Please re-upload the file.");
+      } else {
+        showToast("Error reading file — make sure it's a valid .xlsx");
+      }
     }
     setUploading(false);
   };
@@ -426,7 +544,7 @@ export default function App() {
         });
       }
       showToast("Saved");
-    } catch (e) { showToast("Save failed"); }
+    } catch { showToast("Save failed"); }
     setSaving(false);
   }, [notes, flags]);
 
@@ -448,7 +566,7 @@ export default function App() {
           body: JSON.stringify({ data: { key, status: statuses[key] || "open", note: value, flag: "false", updatedAt: new Date().toISOString() } }),
         });
       }
-    } catch (e) {}
+    } catch { /* ignore */ }
     showToast("Note saved");
   }, [statuses, flags]);
 
@@ -471,7 +589,7 @@ export default function App() {
           body: JSON.stringify({ data: { key, status: statuses[key] || "open", note: notes[key] || "", flag: String(newFlag), updatedAt: new Date().toISOString() } }),
         });
       }
-    } catch (e) {}
+    } catch { /* ignore */ }
   }, [flags, statuses, notes]);
 
   const handleSort = (field) => {
@@ -509,10 +627,8 @@ export default function App() {
     open: filtered.filter(r => effStatus(makeKey(r, rawData.indexOf(r))) === "open").length,
   };
 
-  const KNOWN_CENTERS = ["Avon", "Beavercreek", "Eastgate", "Englewood", "Fairfield", "Independence", "Lorain", "Parma", "Springboro", "Westwood"];
-
   const centerStats = useMemo(() => {
-    return KNOWN_CENTERS.map(center => {
+    return CENTERS.map(center => {
       const rows = rawData.filter(r => centerName(r.location) === center);
       const total = rows.length;
       const resolved = rows.filter(r => {
@@ -531,111 +647,333 @@ export default function App() {
     return d;
   };
 
-  const weekLabel = getWeekLabel(rawData);
+
+  // Still checking session — show nothing to avoid flash of login screen
+  if (isAuthenticated === null) {
+    return (
+      <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0f172a 0%, #1a3a6b 55%, #0f172a 100%)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 14 }}>Loading…</div>
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     return (
-      <div style={{ minHeight: "100vh", background: "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', 'Segoe UI', sans-serif" }}>
-        <div style={{ background: "white", borderRadius: 16, border: "1.5px solid #e2e8f0", padding: "48px 40px", width: "100%", maxWidth: 400, boxShadow: "0 8px 32px rgba(0,0,0,0.08)", textAlign: "center" }}>
-          <img src={LOGO} alt="ECS" style={{ width: 56, height: 56, borderRadius: 12, marginBottom: 20 }} />
-          <div style={{ fontSize: 22, fontWeight: 800, color: "#1e293b", letterSpacing: "-0.5px", marginBottom: 6 }}>ECS Hub</div>
-          <div style={{ fontSize: 13, color: "#64748b", marginBottom: 32 }}>Enter your password to continue</div>
-          <input
-            type="password"
-            value={loginPassword}
-            onChange={e => { setLoginPassword(e.target.value); setLoginError(false); }}
-            onKeyDown={e => e.key === "Enter" && handleLogin()}
-            placeholder="Password"
-            autoFocus
-            style={{ width: "100%", border: `1.5px solid ${loginError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 15, marginBottom: 10, background: loginError ? "#fff8f8" : "white", outline: "none", textAlign: "center", letterSpacing: "2px" }}
-          />
-          {loginError && <div style={{ fontSize: 12, color: "#dc2626", marginBottom: 10 }}>Incorrect password. Try again.</div>}
-          <button
-            onClick={handleLogin}
-            style={{ width: "100%", background: "#1e293b", color: "white", border: "none", borderRadius: 10, padding: "13px", fontSize: 15, fontWeight: 700, cursor: "pointer", marginTop: 4 }}
-          >
-            Sign In
-          </button>
+      <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0f172a 0%, #1a3a6b 55%, #0f172a 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', 'Segoe UI', sans-serif", position: "relative", overflow: "hidden" }}>
+        {/* Decorative background blobs */}
+        <div style={{ position: "absolute", width: 500, height: 500, borderRadius: "50%", background: "rgba(59,130,246,0.07)", top: -150, right: -150, pointerEvents: "none" }} />
+        <div style={{ position: "absolute", width: 350, height: 350, borderRadius: "50%", background: "rgba(99,179,237,0.06)", bottom: -100, left: -100, pointerEvents: "none" }} />
+        <div style={{ position: "absolute", width: 180, height: 180, borderRadius: "50%", background: "rgba(147,197,253,0.05)", top: "38%", left: "12%", pointerEvents: "none" }} />
+        <div style={{ position: "absolute", width: 120, height: 120, borderRadius: "50%", background: "rgba(59,130,246,0.06)", bottom: "25%", right: "14%", pointerEvents: "none" }} />
+
+        {/* Card */}
+        <div style={{ background: "white", borderRadius: 20, border: "1px solid rgba(226,232,240,0.8)", padding: "44px 40px 36px", width: "100%", maxWidth: 420, boxShadow: "0 30px 80px rgba(0,0,0,0.45)", textAlign: "center", position: "relative", zIndex: 1 }}>
+
+          {/* Logo + branding */}
+          <img src={LOGO} alt="ECS" style={{ width: 68, height: 68, borderRadius: 16, marginBottom: 14, boxShadow: "0 4px 20px rgba(0,0,0,0.15)" }} />
+          <div style={{ fontSize: 26, fontWeight: 800, color: "#0f172a", letterSpacing: "-0.5px", marginBottom: 4 }}>ECS Hub</div>
+          <div style={{ fontSize: 13, color: "#64748b", marginBottom: 28 }}>Empowered Community Services</div>
+
+          {!showRegister ? (
+            <>
+              {/*
+                autocomplete="username" and autocomplete="current-password" are the
+                magic attributes that tell Chrome/Edge/Safari to offer to save these
+                credentials and autofill them on the next visit.
+              */}
+              <form onSubmit={e => { e.preventDefault(); handleLogin(); }} style={{ textAlign: "left" }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Username</label>
+                <input
+                  type="text"
+                  name="username"
+                  value={loginUsername}
+                  onChange={e => { setLoginUsername(e.target.value); setLoginError(""); }}
+                  placeholder="Enter your username"
+                  autoFocus
+                  autoComplete="username"
+                  style={{ width: "100%", border: `1.5px solid ${loginError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: loginError ? "#fff8f8" : "#f8fafc", outline: "none", boxSizing: "border-box" }}
+                />
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Password</label>
+                <input
+                  type="password"
+                  name="password"
+                  value={loginPassword}
+                  onChange={e => { setLoginPassword(e.target.value); setLoginError(""); }}
+                  placeholder="Enter your password"
+                  autoComplete="current-password"
+                  style={{ width: "100%", border: `1.5px solid ${loginError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 10, background: loginError ? "#fff8f8" : "#f8fafc", outline: "none", boxSizing: "border-box" }}
+                />
+                {loginError && <div style={{ fontSize: 12, color: "#dc2626", marginBottom: 10 }}>{loginError}</div>}
+                <button
+                  type="submit"
+                  style={{ width: "100%", background: "linear-gradient(135deg, #3b82f6, #1d4ed8)", color: "white", border: "none", borderRadius: 10, padding: "13px", fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 14px rgba(59,130,246,0.4)", marginTop: 4 }}
+                >
+                  Sign In
+                </button>
+              </form>
+              <div style={{ marginTop: 16, textAlign: "center" }}>
+                <button
+                  onClick={() => { setShowRegister(true); setLoginError(""); }}
+                  style={{ background: "none", border: "none", color: "#3b82f6", fontSize: 13, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}
+                >
+                  First time? Create your account
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>Create Your Account</div>
+              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 20 }}>Enter the invite code from your manager, then pick a username and password.</div>
+              <form onSubmit={e => { e.preventDefault(); handleRegister(); }} style={{ textAlign: "left" }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Invite Code</label>
+                <input
+                  type="password"
+                  value={regInviteCode}
+                  onChange={e => { setRegInviteCode(e.target.value); setRegError(""); }}
+                  placeholder="Enter invite code"
+                  autoFocus
+                  autoComplete="off"
+                  style={{ width: "100%", border: `1.5px solid ${regError && !regUsername ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: "#f8fafc", outline: "none", boxSizing: "border-box" }}
+                />
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Choose a Username</label>
+                <input
+                  type="text"
+                  name="username"
+                  value={regUsername}
+                  onChange={e => { setRegUsername(e.target.value); setRegError(""); }}
+                  placeholder="e.g. sarah_jones"
+                  autoComplete="username"
+                  style={{ width: "100%", border: `1.5px solid ${regError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: "#f8fafc", outline: "none", boxSizing: "border-box" }}
+                />
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Choose a Password</label>
+                <input
+                  type="password"
+                  name="new-password"
+                  value={regPassword}
+                  onChange={e => { setRegPassword(e.target.value); setRegError(""); }}
+                  placeholder="At least 8 characters"
+                  autoComplete="new-password"
+                  style={{ width: "100%", border: `1.5px solid ${regError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: "#f8fafc", outline: "none", boxSizing: "border-box" }}
+                />
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Confirm Password</label>
+                <input
+                  type="password"
+                  value={regConfirm}
+                  onChange={e => { setRegConfirm(e.target.value); setRegError(""); }}
+                  placeholder="Re-enter your password"
+                  autoComplete="new-password"
+                  style={{ width: "100%", border: `1.5px solid ${regError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 10, background: "#f8fafc", outline: "none", boxSizing: "border-box" }}
+                />
+                {regError && <div style={{ fontSize: 12, color: "#dc2626", marginBottom: 10 }}>{regError}</div>}
+                <button
+                  type="submit"
+                  disabled={regLoading}
+                  style={{ width: "100%", background: regLoading ? "#93c5fd" : "linear-gradient(135deg, #3b82f6, #1d4ed8)", color: "white", border: "none", borderRadius: 10, padding: "13px", fontSize: 15, fontWeight: 700, cursor: regLoading ? "default" : "pointer", boxShadow: "0 4px 14px rgba(59,130,246,0.4)", marginTop: 4 }}
+                >
+                  {regLoading ? "Creating account…" : "Create Account"}
+                </button>
+              </form>
+              <div style={{ marginTop: 16, textAlign: "center" }}>
+                <button
+                  onClick={() => { setShowRegister(false); setRegError(""); setRegInviteCode(""); setRegUsername(""); setRegPassword(""); setRegConfirm(""); }}
+                  style={{ background: "none", border: "none", color: "#64748b", fontSize: 13, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}
+                >
+                  ← Back to Sign In
+                </button>
+              </div>
+            </>
+          )}
+
+          <div style={{ marginTop: 24, fontSize: 11, color: "#94a3b8" }}>Empowered Community Services © 2025</div>
         </div>
       </div>
     );
   }
 
+  const MODULE_IDS = MODULES.map(m => m.id);
+
+  // Manager role can only access the tracker module. Any other module tab
+  // shows the Under Construction placeholder. Workspace tabs (faq, modules,
+  // announcements, reports) remain accessible so sidebar nav still works.
+  const showUnderConstruction =
+    userRole === "manager" &&
+    MODULE_IDS.includes(activeTab) &&
+    activeTab !== "tracker";
+  const underConstructionModuleName =
+    (MODULES.find(m => m.id === activeTab) || {}).name || "This module";
+
+  const sidebarActive = (tab) => {
+    if (tab === "modules") return MODULE_IDS.includes(activeTab) || activeTab === "modules";
+    if (tab === "faq") return activeTab === "faq";
+    return activeTab === tab;
+  };
+  const PAGE_LABEL = { home: "Home", modules: "Modules", tracker: "Billing Error Detection", billing: "Billing Overview", calculator: "Saturday Calculator", fleet: "Fleet Dashboard", utilization: "Utilization Tracker", faq: "Help Center", announcements: "Announcements", reports: "Reports" };
+  const breadcrumbs = () => {
+    if (activeTab === "home") return [{ label: "Home" }];
+    if (activeTab === "modules") return [{ label: "Home", tab: "home" }, { label: "Modules" }];
+    if (MODULE_IDS.includes(activeTab)) return [{ label: "Home", tab: "home" }, { label: "Modules", tab: "modules" }, { label: PAGE_LABEL[activeTab] || activeTab }];
+    return [{ label: "Home", tab: "home" }, { label: PAGE_LABEL[activeTab] || activeTab }];
+  };
+
   return (
-    <div style={{ fontFamily: "\'DM Sans\', \'Segoe UI\', sans-serif", background: "#f8fafc", minHeight: "100vh", color: "#1e293b" }}>
+    <div style={{ fontFamily: "'DM Sans', system-ui, sans-serif", background: "var(--bg)", minHeight: "100vh", color: "var(--text-1)", display: "flex" }}>
       <style>{`
-        @import url(\'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap\');
-        * { box-sizing: border-box; }
-        select:focus, button:focus, input:focus, textarea:focus { outline: 2px solid #3b82f6; outline-offset: 2px; }
-        .error-row:hover { background: #f1f5f9 !important; }
-        .status-btn { cursor: pointer; border: 1.5px solid; border-radius: 20px; padding: 3px 10px; font-size: 12px; font-weight: 500; transition: all 0.15s; white-space: nowrap; }
-        .status-btn:hover { transform: scale(1.05); filter: brightness(0.95); }
-        .status-btn.active { box-shadow: 0 0 0 2px rgba(59,130,246,0.4); }
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: #f1f5f9; }
-        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
-      `}</style>
-      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap');
+        *, *::before, *::after { box-sizing: border-box; }
+        body { margin: 0; }
         :root {
+          --bg: #ffffff;
+          --bg-soft: #f7f7f5;
+          --bg-hover: #f1f1ef;
+          --border: #e9e9e7;
+          --text-1: #1a1a1a;
+          --text-2: #6b6b6b;
+          --text-3: #9b9a97;
+          --accent: #2383e2;
+          --accent-soft: #e8f1fc;
           --navy: #1a2d4d;
           --steel: #4a7ab5;
           --powder: #8fb3d4;
           --light: #d6e8f5;
-          --bg: #f4f8fc;
-          --border: #dce8f2;
-          --muted: #64748b;
+          --muted: #6b6b6b;
+          --sidebar-w: 220px;
+          --topbar-h: 52px;
         }
-        .module-card { transition: all 0.2s; }
-        .module-card:hover { border-color: var(--steel) !important; box-shadow: 0 8px 24px rgba(74,122,181,0.12); transform: translateY(-2px); }
-        .module-card:hover .module-arrow { transform: translateX(4px); }
-        .module-arrow { transition: transform 0.2s; display: inline-block; }
+        select:focus, button:focus, input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .error-row:hover { background: var(--bg-hover) !important; }
+        .status-btn { cursor: pointer; border: 1px solid; border-radius: 4px; padding: 3px 10px; font-size: 12px; font-weight: 500; transition: opacity 0.1s; white-space: nowrap; font-family: inherit; }
+        .status-btn:hover { opacity: 0.8; }
+        .status-btn.active { box-shadow: 0 0 0 2px var(--accent); }
         .faq-a { display: none; }
         .faq-a.open { display: block; }
-        .nav-btn { transition: all 0.15s; }
-        .nav-btn:hover { background: rgba(255,255,255,0.1) !important; color: white !important; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-        .page-anim { animation: fadeIn 0.2s ease; }
-        .back-btn:hover { background: var(--bg) !important; border-color: var(--steel) !important; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+        .page-anim { animation: fadeIn 0.15s ease; }
+        .back-btn:hover { background: var(--bg-soft) !important; border-color: var(--border) !important; }
+        .nav-item { display: block; width: 100%; text-align: left; border: none; border-radius: 6px; padding: 8px 12px; margin-bottom: 1px; font-size: 13px; font-family: inherit; cursor: pointer; transition: background 0.1s, color 0.1s; background: none; color: rgba(255,255,255,0.65); font-weight: 400; }
+        .nav-item:hover { background: rgba(255,255,255,0.08); color: #fff; }
+        .nav-item.active { background: rgba(255,255,255,0.14); color: #fff; font-weight: 600; }
+        .mod-card { border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px; background: var(--bg); position: relative; cursor: pointer; transition: box-shadow 0.15s, border-color 0.15s; }
+        .mod-card:hover { box-shadow: 0 2px 14px rgba(26,45,77,0.1); border-color: var(--powder); }
+        .mod-card.locked { cursor: default; opacity: 0.75; }
+        .mod-card.locked:hover { box-shadow: none; border-color: var(--border); }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #d4d4d2; border-radius: 3px; }
       `}</style>
 
-      {/* Header */}
-      <div style={{ background: "var(--navy)", padding: "0 32px", height: 60, display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: "0 2px 12px rgba(26,45,77,0.18)", position: "sticky", top: 0, zIndex: 100 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ width: 34, height: 34, borderRadius: 8, background: "white", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+      {/* LEFT SIDEBAR */}
+      <nav style={{ width: "var(--sidebar-w)", flexShrink: 0, background: "var(--navy)", minHeight: "100vh", display: "flex", flexDirection: "column", position: "sticky", top: 0, height: "100vh", overflowY: "auto" }}>
+
+        {/* Brand */}
+        <button onClick={() => setActiveTab("home")} style={{ display: "flex", alignItems: "center", gap: 10, background: "none", border: "none", cursor: "pointer", padding: "18px 16px 16px", width: "100%", textAlign: "left", borderBottom: "1px solid rgba(255,255,255,0.1)", flexShrink: 0 }}>
+          <div style={{ width: 30, height: 30, borderRadius: 7, background: "rgba(255,255,255,0.12)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
             <img src={LOGO} alt="ECS" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
           </div>
-          <div style={{ fontSize: 17, fontWeight: 800, color: "white", letterSpacing: "-0.3px" }}>
-            Empowered <span style={{ color: "var(--powder)" }}>IS</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", letterSpacing: "-0.2px", lineHeight: 1.2 }}>Empowered IS</span>
+        </button>
+
+        {/* Nav items */}
+        <div style={{ flex: 1, padding: "12px 8px", overflowY: "auto" }}>
+          <button className={`nav-item${sidebarActive("home") ? " active" : ""}`} onClick={() => setActiveTab("home")}>Home</button>
+          <button className={`nav-item${sidebarActive("modules") ? " active" : ""}`} onClick={() => setActiveTab("modules")}>Modules</button>
+
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.8px", color: "rgba(255,255,255,0.3)", padding: "16px 12px 6px" }}>Workspace</div>
+          <button className={`nav-item${sidebarActive("announcements") ? " active" : ""}`} onClick={() => setActiveTab("announcements")}>Announcements</button>
+          <button className={`nav-item${sidebarActive("faq") ? " active" : ""}`} onClick={() => setActiveTab("faq")}>Help Center</button>
+          <button className={`nav-item${sidebarActive("reports") ? " active" : ""}`} onClick={() => setActiveTab("reports")}>Reports</button>
+
+          {userRole === "admin" && (
+            <>
+              <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.8px", color: "rgba(255,255,255,0.3)", padding: "16px 12px 6px" }}>Admin</div>
+              <button className={`nav-item${sidebarActive("admin-panel") ? " active" : ""}`} onClick={() => setActiveTab("admin-panel")}>Admin Panel</button>
+            </>
+          )}
+        </div>
+
+        {/* User card */}
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", padding: "14px 16px", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: "50%", background: "var(--steel)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>{userRole === "admin" ? "A" : "M"}</span>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#fff", lineHeight: 1.2 }}>{userRole === "admin" ? "Admin" : "Manager"}</div>
+              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", lineHeight: 1.3, marginTop: 1 }}>ECS Staff</div>
+            </div>
+            <button onClick={handleLogout} title="Log out" style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)", fontSize: 16, padding: 4, lineHeight: 1, display: "flex", alignItems: "center" }}
+              onMouseOver={e => e.currentTarget.style.color = "#fff"} onMouseOut={e => e.currentTarget.style.color = "rgba(255,255,255,0.45)"}>
+              &#x2192;
+            </button>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          {saving && <span style={{ fontSize: 12, color: "#94a3b8", marginRight: 8 }}>Saving…</span>}
-          {["home", "faq"].map(id => (
-            <button key={id} className="nav-btn" onClick={() => setActiveTab(id)}
-              style={{ background: activeTab === id ? "rgba(255,255,255,0.15)" : "none", border: "none",
-                color: activeTab === id ? "white" : "rgba(255,255,255,0.6)",
-                fontSize: 13, fontWeight: 500, fontFamily: "inherit",
-                padding: "7px 14px", borderRadius: 8, cursor: "pointer" }}>
-              {id === "home" ? "Home" : "Help & FAQ"}
-            </button>
-          ))}
-          {isAdmin && (
-            <button className="nav-btn" onClick={() => setActiveTab("admin")}
-              style={{ background: activeTab === "admin" ? "rgba(255,255,255,0.15)" : "none", border: "none",
-                color: activeTab === "admin" ? "white" : "rgba(255,255,255,0.6)",
-                fontSize: 13, fontWeight: 500, fontFamily: "inherit",
-                padding: "7px 14px", borderRadius: 8, cursor: "pointer" }}>
-              Admin
-            </button>
-          )}
-          <button className="nav-btn" onClick={handleLogout}
-            style={{ background: "none", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 8,
-              color: "rgba(255,255,255,0.7)", fontSize: 13, fontWeight: 500, fontFamily: "inherit",
-              padding: "6px 14px", cursor: "pointer", marginLeft: 4 }}>
-            Log Out
-          </button>
+
+      </nav>
+
+      {/* RIGHT COLUMN */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: "100vh" }}>
+
+        {/* TOP BAR */}
+        <header style={{ height: "var(--topbar-h)", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px", background: "var(--bg)", position: "sticky", top: 0, zIndex: 100, flexShrink: 0 }}>
+          {/* Breadcrumbs */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, minWidth: 0 }}>
+            {breadcrumbs().map((crumb, i) => (
+              <React.Fragment key={i}>
+                {i > 0 && <span style={{ color: "var(--text-3)", fontSize: 12 }}>/</span>}
+                {crumb.tab ? (
+                  <button onClick={() => setActiveTab(crumb.tab)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 13, color: "var(--text-3)", fontFamily: "inherit" }}
+                    onMouseOver={e => e.currentTarget.style.color = "var(--text-1)"} onMouseOut={e => e.currentTarget.style.color = "var(--text-3)"}>
+                    {crumb.label}
+                  </button>
+                ) : (
+                  <span style={{ color: "var(--text-1)", fontWeight: 500 }}>{crumb.label}</span>
+                )}
+              </React.Fragment>
+            ))}
+          </div>
+          {/* Right side: saving indicator + search shell */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+            {saving && <span style={{ fontSize: 12, color: "var(--text-3)" }}>Saving…</span>}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--bg-soft)", border: "1px solid var(--border)", borderRadius: 7, padding: "6px 12px" }}>
+              <span style={{ fontSize: 12, color: "var(--text-3)" }}>&#x2315;</span>
+              <input placeholder="Search…" style={{ background: "none", border: "none", outline: "none", fontSize: 13, color: "var(--text-1)", fontFamily: "inherit", width: 160 }} />
+            </div>
+          </div>
+        </header>
+
+      <main style={{ flex: 1, minWidth: 0 }}>
+
+      {/* SheetDB health-check banner */}
+      {sheetDbBannerVisible && (
+        <div style={{
+          background: "#fef9c3",
+          border: "1.5px solid #fde68a",
+          color: "#92400e",
+          padding: "10px 24px",
+          fontSize: 13,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 16,
+        }}>
+          <span>Data service may be unavailable — some information may not load correctly. If this persists, contact Brock.</span>
+          <button
+            onClick={() => setSheetDbBannerVisible(false)}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "#92400e",
+              fontSize: 16,
+              fontWeight: 700,
+              padding: "0 4px",
+              lineHeight: 1,
+              flexShrink: 0,
+            }}
+            aria-label="Dismiss"
+          >✕</button>
         </div>
-      </div>
+      )}
 
       {/* Upload Modal */}
       {showUpload && (
@@ -664,8 +1002,7 @@ export default function App() {
               <>
                 <div style={{ border: "2px dashed #cbd5e1", borderRadius: 12, padding: 32, textAlign: "center", cursor: "pointer", background: "#f8fafc" }}
                   onClick={() => fileRef.current?.click()}>
-                  <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "#374151" }}>Click to select your Excel file</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Click to select your Excel file</div>
                   <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>.xlsx files only</div>
                   <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleFileUpload} />
                 </div>
@@ -680,58 +1017,96 @@ export default function App() {
       {/* HOME PAGE */}
       {activeTab === "home" && (
         <div className="page-anim">
-          {/* Hero */}
-          <div style={{ background: "linear-gradient(135deg, var(--navy) 0%, #2a4a7a 60%, #3a6a9a 100%)", padding: "56px 32px 48px", textAlign: "center", position: "relative", overflow: "hidden" }}>
-            <div style={{ position: "absolute", top: -60, right: -60, width: 300, height: 300, background: "radial-gradient(circle, rgba(143,179,212,0.15) 0%, transparent 70%)", borderRadius: "50%" }} />
-            <div style={{ position: "absolute", bottom: -40, left: -40, width: 200, height: 200, background: "radial-gradient(circle, rgba(74,122,181,0.2) 0%, transparent 70%)", borderRadius: "50%" }} />
-            <div style={{ display: "inline-block", background: "rgba(143,179,212,0.2)", border: "1px solid rgba(143,179,212,0.3)", color: "var(--powder)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", padding: "5px 14px", borderRadius: 100, marginBottom: 16 }}>Internal Platform</div>
-            <div style={{ fontSize: 38, fontWeight: 800, color: "white", letterSpacing: -1, lineHeight: 1.1, marginBottom: 12 }}>
-              Empowered <span style={{ color: "var(--powder)" }}>Information Systems</span>
+          <div style={{ borderBottom: "1px solid var(--border)", padding: "20px 40px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div>
+              <h1 style={{ fontSize: 20, fontWeight: 700, color: "var(--text-1)", margin: 0, letterSpacing: "-0.3px" }}>Overview</h1>
+              <p style={{ fontSize: 13, color: "var(--text-2)", margin: "3px 0 0" }}>Live snapshot across billing, funding, and fleet.</p>
             </div>
-            <div style={{ fontSize: 15, color: "rgba(255,255,255,0.65)", maxWidth: 480, margin: "0 auto", lineHeight: 1.6 }}>
-              Your internal toolkit for managing center operations, tracking errors, and planning events.
-            </div>
+            <button onClick={() => setActiveTab("modules")} style={{ background: "var(--navy)", color: "#fff", border: "none", borderRadius: 7, padding: "8px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+              All Modules
+            </button>
           </div>
+          <div style={{ position: "relative" }}>
+            <HomeDashboard rawData={rawData} statuses={statuses} onNavigate={setActiveTab} />
+            {userRole !== "admin" && (
+              <div style={{ position: "absolute", inset: 0, background: "rgba(255,255,255,0.82)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", zIndex: 20, minHeight: 300 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", color: "var(--steel)", marginBottom: 10 }}>Coming Soon</div>
+                <div style={{ fontSize: 30, fontWeight: 800, color: "var(--navy)", letterSpacing: "-0.5px" }}>Under Construction</div>
+                <div style={{ fontSize: 14, color: "var(--text-2)", marginTop: 10, maxWidth: 320, textAlign: "center", lineHeight: 1.6 }}>The overview dashboard is being prepared. Check back soon.</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
-          {/* Module Cards */}
-          <div style={{ padding: "40px 32px", maxWidth: 960, margin: "0 auto" }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 20 }}>Available Modules</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 16 }}>
-
-              {/* Error Tracker Card */}
-              <div className="module-card" onClick={() => setActiveTab("tracker")}
-                style={{ background: "white", border: "1.5px solid var(--border)", borderRadius: 14, padding: 24, cursor: "pointer", position: "relative", overflow: "hidden" }}>
-                <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, var(--navy), var(--steel))" }} />
-                <div style={{ width: 48, height: 48, borderRadius: 12, background: "#e8f0fa", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, marginBottom: 16 }}>📋</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "var(--navy)", marginBottom: 6 }}>Error Tracker</div>
-                <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5, marginBottom: 16 }}>Log and track weekly transportation and attendance errors across all centers.</div>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", padding: "3px 8px", borderRadius: 100, background: "var(--light)", color: "var(--steel)" }}>Weekly</span>
-                  <span className="module-arrow" style={{ color: "var(--steel)", fontSize: 16 }}>→</span>
+      {/* MODULES PAGE */}
+      {activeTab === "modules" && (
+        <div className="page-anim" style={{ padding: "40px 44px" }}>
+          <p style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.7px", color: "var(--text-3)", margin: "0 0 8px" }}>Platform</p>
+          <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-1)", letterSpacing: "-0.4px", margin: "0 0 6px", lineHeight: 1.2 }}>Modules</h1>
+          <p style={{ fontSize: 14, color: "var(--text-2)", margin: "0 0 32px", lineHeight: 1.5 }}>Tools and dashboards available to your team.</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
+            {MODULES.map(m => {
+              const canAccess = m.available || userRole === "admin";
+              return (
+              <div key={m.id}
+                className={`mod-card${canAccess ? "" : " locked"}`}
+                onClick={() => canAccess && setActiveTab(m.id)}
+              >
+                {m.available ? (
+                  <span style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", background: "#dcfce7", color: "#166534", padding: "3px 8px", borderRadius: 4 }}>Active</span>
+                ) : canAccess ? (
+                  <span style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", background: "#eff6ff", color: "#1d4ed8", padding: "3px 8px", borderRadius: 4, border: "1px solid #bfdbfe" }}>Admin</span>
+                ) : (
+                  <span style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", background: "var(--bg-soft)", color: "var(--text-3)", padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border)" }}>Coming Soon</span>
+                )}
+                <div style={{ width: 36, height: 36, borderRadius: 8, background: canAccess ? "var(--navy)" : "var(--bg-soft)", marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <div style={{ width: 14, height: 14, borderRadius: 3, background: canAccess ? "rgba(143,179,212,0.7)" : "var(--border)" }} />
                 </div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-1)", marginBottom: 5 }}>{m.name}</div>
+                <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>{m.description}</div>
+                {canAccess && (
+                  <div style={{ marginTop: 16, fontSize: 12, fontWeight: 700, color: "var(--navy)", letterSpacing: "-0.1px" }}>Open &rarr;</div>
+                )}
               </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
-              {/* Saturday Calculator Card — Under Construction */}
-              <div className="module-card"
-                style={{ background: "#f8fafc", border: "1.5px solid var(--border)", borderRadius: 14, padding: 24, cursor: "not-allowed", position: "relative", overflow: "hidden", opacity: 0.75 }}>
-                <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #94a3b8, #cbd5e1)" }} />
-                <div style={{ position: "absolute", top: 10, right: 10, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", padding: "3px 8px", borderRadius: 100, background: "#fef9c3", color: "#92400e", border: "1px solid #fde68a" }}>Under Construction</div>
-                <div style={{ width: 48, height: 48, borderRadius: 12, background: "#e2e8f0", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, marginBottom: 16 }}>🚧</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>Saturday Calculator</div>
-                <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5, marginBottom: 16 }}>This module is temporarily unavailable while updates are being made.</div>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", padding: "3px 8px", borderRadius: 100, background: "#e2e8f0", color: "#94a3b8" }}>Locked</span>
-                  <span style={{ color: "#94a3b8", fontSize: 16 }}>🔒</span>
-                </div>
-              </div>
+      {/* ANNOUNCEMENTS PAGE */}
+      {activeTab === "announcements" && (
+        <div className="page-anim" style={{ padding: "52px 44px", maxWidth: 640 }}>
+          <p style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.7px", color: "var(--text-3)", margin: "0 0 8px" }}>Workspace</p>
+          <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-1)", letterSpacing: "-0.4px", margin: "0 0 6px" }}>Announcements</h1>
+          <p style={{ fontSize: 14, color: "var(--text-2)", margin: "0 0 32px" }}>Team updates and notices will appear here.</p>
+          <div style={{ background: "var(--bg-soft)", border: "1px solid var(--border)", borderRadius: 10, padding: "24px", textAlign: "center" }}>
+            <div style={{ fontSize: 13, color: "var(--text-3)" }}>No announcements yet.</div>
+          </div>
+        </div>
+      )}
 
-              {/* Coming Soon */}
-              <div style={{ background: "white", border: "1.5px dashed var(--border)", borderRadius: 14, padding: 24, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 160, opacity: 0.6 }}>
-                <div style={{ fontSize: 28, marginBottom: 10, color: "var(--muted)" }}>＋</div>
-                <div style={{ fontSize: 13, color: "var(--muted)", fontWeight: 500 }}>More modules coming soon</div>
-              </div>
+      {/* REPORTS PAGE */}
+      {activeTab === "reports" && (
+        <div className="page-anim" style={{ padding: "52px 44px", maxWidth: 640 }}>
+          <p style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.7px", color: "var(--text-3)", margin: "0 0 8px" }}>Workspace</p>
+          <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-1)", letterSpacing: "-0.4px", margin: "0 0 6px" }}>Reports</h1>
+          <p style={{ fontSize: 14, color: "var(--text-2)", margin: "0 0 32px" }}>Scheduled and on-demand reports will be available here.</p>
+          <div style={{ background: "var(--bg-soft)", border: "1px solid var(--border)", borderRadius: 10, padding: "24px", textAlign: "center" }}>
+            <div style={{ fontSize: 13, color: "var(--text-3)" }}>Coming soon.</div>
+          </div>
+        </div>
+      )}
 
-            </div>
+      {/* ADMIN PANEL PAGE */}
+      {activeTab === "admin-panel" && userRole === "admin" && (
+        <div className="page-anim" style={{ padding: "52px 44px", maxWidth: 640 }}>
+          <p style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.7px", color: "var(--text-3)", margin: "0 0 8px" }}>Admin</p>
+          <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-1)", letterSpacing: "-0.4px", margin: "0 0 6px" }}>Admin Panel</h1>
+          <p style={{ fontSize: 14, color: "var(--text-2)", margin: "0 0 32px" }}>Administrative controls and system settings.</p>
+          <div style={{ background: "var(--bg-soft)", border: "1px solid var(--border)", borderRadius: 10, padding: "24px", textAlign: "center" }}>
+            <div style={{ fontSize: 13, color: "var(--text-3)" }}>Admin tools coming soon.</div>
           </div>
         </div>
       )}
@@ -766,44 +1141,49 @@ export default function App() {
 
           {/* Contact */}
           <div style={{ marginBottom: 36 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--steel)", textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 12, paddingBottom: 8, borderBottom: "1.5px solid var(--border)" }}>Contact</div>
-            <div style={{ background: "linear-gradient(135deg, var(--navy), #2a4a7a)", borderRadius: 14, padding: "28px 32px", display: "flex", alignItems: "center", gap: 20 }}>
-              <div style={{ width: 52, height: 52, borderRadius: "50%", background: "rgba(143,179,212,0.25)", border: "2px solid rgba(143,179,212,0.4)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>👤</div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "white", marginBottom: 2 }}>Brock</div>
-                <div style={{ fontSize: 12, color: "var(--powder)" }}>Platform Administrator · Empowered IS</div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>Contact</div>
+            <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "18px 22px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-1)", marginBottom: 2 }}>Brock</div>
+                <div style={{ fontSize: 12, color: "var(--text-2)" }}>Platform Administrator · Empowered IS</div>
               </div>
-              <div style={{ background: "rgba(143,179,212,0.2)", border: "1px solid rgba(143,179,212,0.3)", color: "var(--powder)", fontSize: 11, fontWeight: 600, padding: "5px 12px", borderRadius: 100 }}>Questions? Reach out</div>
+              <span style={{ fontSize: 12, color: "var(--text-3)" }}>Questions? Reach out</span>
             </div>
           </div>
         </div>
       )}
 
-      {/* Inner page back button for tracker and calculator */}
-      {(activeTab === "tracker" || activeTab === "calculator") && (
-        <div style={{ background: "white", borderBottom: "1.5px solid var(--border)", padding: "12px 32px", display: "flex", alignItems: "center", gap: 12 }}>
+      {/* Sub-page bar: unified back button for all module screens.
+          Hidden when UnderConstruction is rendering — UC has its own back button. */}
+      {MODULE_IDS.includes(activeTab) && !showUnderConstruction && (
+        <div style={{ background: "var(--bg)", borderBottom: "1px solid var(--border)", padding: "10px 24px", display: "flex", alignItems: "center", gap: 12 }}>
           <button className="back-btn" onClick={() => setActiveTab("home")}
-            style={{ background: "none", border: "1.5px solid var(--border)", borderRadius: 8, padding: "6px 12px", fontSize: 13, fontWeight: 600, color: "var(--navy)", cursor: "pointer", fontFamily: "inherit" }}>
-            ← Home
+            style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, padding: "5px 12px", fontSize: 13, fontWeight: 500, color: "var(--text-2)", cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}>
+            ← Back to Home
           </button>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--navy)" }}>
-            {activeTab === "tracker" ? "Error Tracker" : "Saturday Calculator"}
-          </div>
+          {(activeTab === "tracker" || activeTab === "calculator") && (
+            <>
+              <div style={{ width: 1, height: 16, background: "var(--border)", flexShrink: 0 }} />
+              <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-1)" }}>
+                {activeTab === "tracker" ? "Error Tracker" : "Saturday Calculator"}
+              </div>
+            </>
+          )}
           {activeTab === "tracker" && (
             <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-              {!loaded && <span style={{ fontSize: 12, color: "#94a3b8" }}>Loading…</span>}
+              {!loaded && <span style={{ fontSize: 12, color: "var(--text-3)" }}>Loading…</span>}
               <button
                 onClick={() => { setShowUpload(true); setPasswordOk(false); setUploadPassword(""); setPasswordError(false); }}
-                style={{ background: "var(--steel)", color: "white", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+                style={{ background: "var(--text-1)", color: "white", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}
               >
                 Upload New Week
               </button>
-              <div style={{ background: "#f1f5f9", borderRadius: 8, padding: "4px 12px", fontSize: 12, color: "#64748b" }}>
+              <div style={{ background: "var(--bg-soft)", border: "1px solid var(--border)", borderRadius: 6, padding: "4px 10px", fontSize: 12, color: "var(--text-2)" }}>
                 {stats.open} open · {stats.fixed} fixed
               </div>
               {lastUpdated && (
-                <div style={{ fontSize: 11, color: "#94a3b8" }}>
-                  Report updated {new Date(lastUpdated).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} at {new Date(lastUpdated).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+                <div style={{ fontSize: 11, color: "var(--text-3)" }}>
+                  Updated {new Date(lastUpdated).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                 </div>
               )}
             </div>
@@ -811,22 +1191,22 @@ export default function App() {
         </div>
       )}
 
-      {activeTab === "calculator" && (
+      {/* Under Construction placeholder — manager role on any non-tracker module.
+          Renders in place of the actual module content. Per spec, includes its
+          own back button to Home. */}
+      {showUnderConstruction && (
+        <UnderConstruction
+          moduleName={underConstructionModuleName}
+          onBack={() => setActiveTab("home")}
+        />
+      )}
+
+      {activeTab === "calculator" && !showUnderConstruction && (
+        <ErrorBoundary moduleName="Saturday Calculator">
         <div style={{ padding: "32px 24px" }}>
           <div style={{ maxWidth: 760, margin: "0 auto" }}>
-            <div style={{ textAlign: "center", padding: "60px 24px", background: "white", borderRadius: 16, border: "1.5px solid #e2e8f0", boxShadow: "0 2px 8px rgba(0,0,0,0.05)" }}>
-              <div style={{ fontSize: 56, marginBottom: 16 }}>🚧</div>
-              <div style={{ fontSize: 24, fontWeight: 800, color: "#1e293b", marginBottom: 8 }}>Under Construction</div>
-              <div style={{ fontSize: 15, color: "#64748b", maxWidth: 380, margin: "0 auto", lineHeight: 1.6 }}>
-                The Saturday Calculator is temporarily unavailable while we make improvements. Please check back soon.
-              </div>
-              <div style={{ marginTop: 24, display: "inline-block", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.6px", padding: "6px 14px", borderRadius: 100, background: "#fef9c3", color: "#92400e", border: "1px solid #fde68a" }}>
-                Coming Back Soon
-              </div>
-            </div>
-            <div style={{ display: "none" }}>
             <div style={{ marginBottom: 28 }}>
-              <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.5px" }}>🗓️ Saturday Event Calculator</div>
+              <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.4px", color: "var(--text-1)" }}>Saturday Calculator</div>
               <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>Select your center and enter client counts to see if a Saturday outing is financially viable.</div>
             </div>
 
@@ -836,7 +1216,7 @@ export default function App() {
               <select value={calcCenter} onChange={e => setCalcCenter(e.target.value)}
                 style={{ width: "100%", border: "1.5px solid #e2e8f0", borderRadius: 8, padding: "10px 12px", fontSize: 15, fontWeight: 600, background: "white", cursor: "pointer" }}>
                 <option value="">— Choose a center —</option>
-                {["Beavercreek","Englewood","Avon","Eastgate","Lorain","Parma","Springboro","Fairfield","Independence","Westwood"].map(c => <option key={c}>{c}</option>)}
+                {CENTERS.map(c => <option key={c}>{c}</option>)}
               </select>
               {calcRates && (
                 <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
@@ -919,14 +1299,13 @@ export default function App() {
                   <div style={{ background: "white", borderRadius: 16, border: `2px solid ${!calcResult ? "#e2e8f0" : calcResult.viable ? "#86efac" : "#fca5a5"}`, padding: 24, boxShadow: "0 4px 20px rgba(0,0,0,0.06)", textAlign: "center" }}>
                     {!calcResult ? (
                       <div style={{ padding: "40px 0" }}>
-                        <div style={{ fontSize: 36, marginBottom: 12 }}>👆</div>
                         <div style={{ fontSize: 13, color: "#94a3b8", fontWeight: 500 }}>Enter client counts to see your result</div>
                       </div>
                     ) : (
                       <>
                         <div style={{ marginBottom: 20 }}>
-                          <div style={{ fontSize: 32, marginBottom: 4 }}>{calcResult.viable ? "✅" : "❌"}</div>
-                          <div style={{ fontSize: 20, fontWeight: 800, color: calcResult.viable ? "#16a34a" : "#dc2626" }}>{calcResult.viable ? "Good to Go!" : "Not Viable"}</div>
+                          <div style={{ display: "inline-block", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", padding: "3px 10px", borderRadius: 4, marginBottom: 8, background: calcResult.viable ? "#dcfce7" : "#fee2e2", color: calcResult.viable ? "#166534" : "#991b1b" }}>{calcResult.viable ? "Viable" : "Not Viable"}</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: calcResult.viable ? "#16a34a" : "#dc2626" }}>{calcResult.viable ? "Good to Go!" : "Doesn't Clear Minimum"}</div>
                           <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
                             {calcResult.viable
                               ? `Clears the $500 minimum by $${(calcResult.profit - 500).toLocaleString("en-US", { minimumFractionDigits: 2 })}`
@@ -972,12 +1351,12 @@ export default function App() {
                 </div>
               </div>
             )}
-            </div>
           </div>
         </div>
+        </ErrorBoundary>
       )}
 
-      {activeTab === "tracker" && <div style={{ padding: "24px 32px" }}>
+      {activeTab === "tracker" && !showUnderConstruction && <ErrorBoundary moduleName="Error Tracker"><div style={{ padding: "24px 32px" }}>
         {/* Center Progress Bar Row */}
         {centerStats.length > 0 && (
           <div style={{ display: "flex", gap: 8, marginBottom: 20, overflowX: "auto", paddingBottom: 4 }}>
@@ -1025,7 +1404,7 @@ export default function App() {
               { label: "Fixed", val: stats.fixed, color: "#16a34a", bg: "#dcfce7" },
             ].map(s => (
               <div key={s.label} style={{ background: s.bg, border: `1.5px solid ${s.color}30`, borderRadius: 8, padding: "6px 14px", textAlign: "center" }}>
-                <div style={{ fontSize: 20, fontWeight: 700, color: s.color, fontFamily: "\'DM Mono\', monospace" }}>{s.val}</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: s.color, fontFamily: "'DM Mono', monospace" }}>{s.val}</div>
                 <div style={{ fontSize: 11, color: s.color, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>{s.label}</div>
               </div>
             ))}
@@ -1079,7 +1458,7 @@ export default function App() {
                       transition: "background 0.1s" }}>
                       <td style={{ padding: "10px 16px", fontWeight: 500, color: "#1e293b", whiteSpace: "nowrap" }}>{row.name}</td>
                       <td style={{ padding: "10px 16px", color: "#475569", whiteSpace: "nowrap" }}>{centerName(row.location)}</td>
-                      <td style={{ padding: "10px 16px", color: "#475569", fontFamily: "\'DM Mono\', monospace", fontSize: 12, whiteSpace: "nowrap" }}>{formatDate(row.date)}</td>
+                      <td style={{ padding: "10px 16px", color: "#475569", fontFamily: "'DM Mono', monospace", fontSize: 12, whiteSpace: "nowrap" }}>{formatDate(row.date)}</td>
                       <td style={{ padding: "10px 16px", color: "#374151", minWidth: 260, maxWidth: 400, whiteSpace: "normal", wordBreak: "break-word" }}>
                         {row.reason}
                       </td>
@@ -1095,15 +1474,15 @@ export default function App() {
                               onClick={() => saveStatus(key, opt.value)}
                               style={{ background: status === opt.value ? opt.bg : "white", color: status === opt.value ? opt.color : "#9ca3af",
                                 borderColor: status === opt.value ? opt.border : "#e5e7eb", opacity: status === opt.value ? 1 : 0.7 }}>
-                              {opt.icon} {opt.label}
+                              {opt.label}
                             </button>
                           ))}
                           <button onClick={() => saveFlag(key)}
                             title={flagged ? "Remove flag" : "Flag this row"}
                             style={{ background: flagged ? "#fef2f2" : "white", color: flagged ? "#dc2626" : "#d1d5db",
-                              border: `1.5px solid ${flagged ? "#fca5a5" : "#e5e7eb"}`, borderRadius: 6,
-                              padding: "3px 7px", fontSize: 13, cursor: "pointer", lineHeight: 1, transition: "all 0.15s" }}>
-                            🚩
+                              border: `1px solid ${flagged ? "#fca5a5" : "#e5e7eb"}`, borderRadius: 4,
+                              padding: "3px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer", lineHeight: 1, transition: "all 0.15s", fontFamily: "inherit" }}>
+                            {flagged ? "Flagged" : "Flag"}
                           </button>
                         </div>
                       </td>
@@ -1114,7 +1493,7 @@ export default function App() {
                             fontSize: 12, cursor: "pointer", maxWidth: 180, textAlign: "left", whiteSpace: "nowrap",
                             overflow: "hidden", textOverflow: "ellipsis", display: "block" }}
                           title={note || "Add note"}>
-                          {note ? `📝 ${note}` : "+ Add note"}
+                          {note ? note : "+ Add note"}
                         </button>
                       </td>
                     </tr>
@@ -1129,14 +1508,14 @@ export default function App() {
             </table>
           </div>
         </div>
-      </div>}
+      </div></ErrorBoundary>}
 
       {/* Note Modal */}
       {noteModal && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9998 }}
           onClick={e => e.target === e.currentTarget && setNoteModal(null)}>
           <div style={{ background: "white", borderRadius: 16, padding: 28, width: 480, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
-            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4, color: "#1e293b" }}>📝 Note</div>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4, color: "#1e293b" }}>Note</div>
             <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 16 }}>Click outside to close without saving</div>
             <textarea
               autoFocus
@@ -1156,12 +1535,38 @@ export default function App() {
         </div>
       )}
 
+      {activeTab === "billing" && !showUnderConstruction && (
+        <div className="page-anim">
+          <ErrorBoundary moduleName="Billing Overview">
+            <BillingDashboard onBack={() => setActiveTab("home")} userRole={userRole} />
+          </ErrorBoundary>
+        </div>
+      )}
+
+      {activeTab === "fleet" && !showUnderConstruction && (
+        <div className="page-anim">
+          <ErrorBoundary moduleName="Fleet Dashboard">
+            <FleetDashboard onBack={() => setActiveTab("home")} userRole={userRole} />
+          </ErrorBoundary>
+        </div>
+      )}
+
+      {activeTab === "utilization" && !showUnderConstruction && (
+        <div className="page-anim">
+          <ErrorBoundary moduleName="Utilization Dashboard">
+            <UtilizationDashboard onBack={() => setActiveTab("home")} userRole={userRole} />
+          </ErrorBoundary>
+        </div>
+      )}
+
       {toast && (
-        <div style={{ position: "fixed", bottom: 24, right: 24, background: "#1e293b", color: "white", borderRadius: 10,
-          padding: "10px 18px", fontSize: 13, fontWeight: 500, boxShadow: "0 4px 16px rgba(0,0,0,0.2)", zIndex: 9999 }}>
+        <div style={{ position: "fixed", bottom: 24, right: 24, background: "var(--navy)", color: "white", borderRadius: 10, padding: "10px 18px", fontSize: 13, fontWeight: 500, boxShadow: "0 4px 16px rgba(0,0,0,0.2)", zIndex: 9999 }}>
           {toast}
         </div>
       )}
+
+      </main>
+      </div>
     </div>
   );
 }
