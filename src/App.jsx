@@ -175,6 +175,190 @@ function UnderConstruction({ moduleName, onBack }) {
   );
 }
 
+// ── Admin Panel Component ─────────────────────────────────────────────────────
+function AdminPanel({ apiBase, modules }) {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState({});
+  const [toast, setToast] = useState(null);
+
+  const showToast = (msg, ok = true) => {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 2500);
+  };
+
+  const fetchUsers = () => {
+    setLoading(true);
+    fetch(`${apiBase}/admin/users`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => { setUsers(Array.isArray(data) ? data : []); setLoading(false); })
+      .catch(() => { showToast("Failed to load users", false); setLoading(false); });
+  };
+
+  useEffect(() => { fetchUsers(); }, []);
+
+  const setRole = async (username, role) => {
+    setSaving(s => ({ ...s, [username]: true }));
+    const res = await fetch(`${apiBase}/admin/users/${username}/role`, {
+      method: "PATCH", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setUsers(prev => prev.map(u => u.username === username
+        ? { ...u, role: data.role, permissions: data.permissions } : u));
+      showToast(`${username} is now ${role}`);
+    } else { showToast("Failed to update role", false); }
+    setSaving(s => ({ ...s, [username]: false }));
+  };
+
+  const togglePermission = async (username, moduleId, current) => {
+    setSaving(s => ({ ...s, [`${username}-${moduleId}`]: true }));
+    const res = await fetch(`${apiBase}/admin/users/${username}/permissions`, {
+      method: "PATCH", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ permissions: { [moduleId]: !current } }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setUsers(prev => prev.map(u => u.username === username
+        ? { ...u, permissions: data.permissions } : u));
+    } else { showToast("Failed to update permission", false); }
+    setSaving(s => ({ ...s, [`${username}-${moduleId}`]: false }));
+  };
+
+  const deleteUser = async (username) => {
+    if (!window.confirm(`Delete user "${username}"? This cannot be undone.`)) return;
+    const res = await fetch(`${apiBase}/admin/users/${username}`, {
+      method: "DELETE", credentials: "include",
+    });
+    if (res.ok) { setUsers(prev => prev.filter(u => u.username !== username)); showToast(`${username} deleted`); }
+    else { showToast("Failed to delete user", false); }
+  };
+
+  const ROLE_COLORS = {
+    admin:   { bg: "#fef3c7", text: "#92400e", border: "#fde68a" },
+    manager: { bg: "#dbeafe", text: "#1e40af", border: "#bfdbfe" },
+    staff:   { bg: "#f0fdf4", text: "#166534", border: "#bbf7d0" },
+  };
+
+  return (
+    <div className="page-anim" style={{ padding: "32px 40px", maxWidth: 1100, margin: "0 auto" }}>
+      {toast && (
+        <div style={{ position: "fixed", bottom: 24, right: 24, background: toast.ok ? "#0f172a" : "#dc2626", color: "#fff", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 500, zIndex: 9999, boxShadow: "0 4px 20px rgba(0,0,0,0.2)" }}>
+          {toast.msg}
+        </div>
+      )}
+
+      <div style={{ marginBottom: 28 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, color: "var(--navy)", margin: "0 0 4px", letterSpacing: "-0.3px" }}>Admin Panel</h1>
+        <p style={{ fontSize: 13, color: "var(--text-2)", margin: 0 }}>Manage user accounts, roles, and module access. Changes save instantly.</p>
+      </div>
+
+      {/* Stats row */}
+      <div style={{ display: "flex", gap: 14, marginBottom: 28, flexWrap: "wrap" }}>
+        {[
+          { label: "Total Users", value: users.length },
+          { label: "Admins", value: users.filter(u => u.role === "admin").length },
+          { label: "Managers", value: users.filter(u => u.role === "manager").length },
+          { label: "Staff", value: users.filter(u => u.role === "staff").length },
+        ].map(s => (
+          <div key={s.label} style={{ background: "white", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 20px", minWidth: 110 }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "var(--navy)" }}>{s.value}</div>
+            <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 2 }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {loading ? (
+        <div style={{ color: "var(--text-2)", padding: 40, textAlign: "center" }}>Loading users…</div>
+      ) : (
+        <div style={{ background: "white", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
+          {/* Table header */}
+          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 0.9fr 1fr auto", gap: 12, padding: "11px 20px", background: "var(--bg-soft)", borderBottom: "1px solid var(--border)", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.6px", color: "var(--text-2)" }}>
+            <span>User</span><span>Role</span><span>Center</span><span>Module Access</span><span></span>
+          </div>
+
+          {users.length === 0 && (
+            <div style={{ padding: 32, textAlign: "center", color: "var(--text-2)", fontSize: 13 }}>No users found.</div>
+          )}
+
+          {users.map((user, idx) => {
+            const rc = ROLE_COLORS[user.role] || ROLE_COLORS.staff;
+            const joinDate = user.created_at ? new Date(user.created_at).toLocaleDateString() : "—";
+            return (
+              <div key={user.username} style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 0.9fr 1fr auto", gap: 12, padding: "14px 20px", borderBottom: idx < users.length - 1 ? "1px solid var(--border)" : "none", alignItems: "start" }}>
+
+                {/* User info */}
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: "var(--navy)" }}>{user.username}</div>
+                  <div style={{ fontSize: 11, color: "var(--text-2)", marginTop: 2 }}>Joined {joinDate}</div>
+                </div>
+
+                {/* Role selector */}
+                <div>
+                  <select
+                    value={user.role}
+                    onChange={e => setRole(user.username, e.target.value)}
+                    disabled={saving[user.username]}
+                    style={{ fontSize: 12, fontWeight: 600, border: `1.5px solid ${rc.border}`, borderRadius: 6, padding: "4px 8px", background: rc.bg, color: rc.text, cursor: "pointer", outline: "none", width: "100%" }}
+                  >
+                    <option value="staff">Staff</option>
+                    <option value="manager">Manager</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </div>
+
+                {/* Center */}
+                <div style={{ fontSize: 13, color: "var(--text-1)", paddingTop: 4 }}>
+                  {user.center || <span style={{ color: "var(--text-3)" }}>—</span>}
+                </div>
+
+                {/* Module permission toggles */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                  {modules.map(mod => {
+                    const on = user.permissions[mod.id] === true;
+                    const key = `${user.username}-${mod.id}`;
+                    return (
+                      <label key={mod.id} style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", fontSize: 12 }}>
+                        <div
+                          onClick={() => togglePermission(user.username, mod.id, on)}
+                          style={{
+                            width: 32, height: 18, borderRadius: 9, background: on ? "#3b82f6" : "#d1d5db",
+                            position: "relative", cursor: "pointer", transition: "background 0.2s", flexShrink: 0,
+                            opacity: saving[key] ? 0.5 : 1,
+                          }}
+                        >
+                          <div style={{ position: "absolute", top: 2, left: on ? 16 : 2, width: 14, height: 14, borderRadius: "50%", background: "white", transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }} />
+                        </div>
+                        <span style={{ color: on ? "var(--text-1)" : "var(--text-3)" }}>{mod.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                {/* Delete */}
+                <div style={{ paddingTop: 2 }}>
+                  <button
+                    onClick={() => deleteUser(user.username)}
+                    title="Delete user"
+                    style={{ background: "none", border: "1px solid #fca5a5", borderRadius: 6, padding: "4px 8px", fontSize: 11, color: "#dc2626", cursor: "pointer", fontFamily: "inherit" }}
+                    onMouseOver={e => { e.currentTarget.style.background = "#fef2f2"; }}
+                    onMouseOut={e => { e.currentTarget.style.background = "none"; }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   // Auth state: null = "not yet checked", false = "not logged in", true = "logged in".
   // On mount we call GET /auth/me to see if the browser already has a valid JWT cookie.
@@ -189,8 +373,14 @@ export default function App() {
   const [regUsername, setRegUsername] = useState("");
   const [regPassword, setRegPassword] = useState("");
   const [regConfirm, setRegConfirm] = useState("");
+  const [regCenter, setRegCenter] = useState("");
   const [regError, setRegError] = useState("");
   const [regLoading, setRegLoading] = useState(false);
+
+  const ECS_CENTERS = [
+    "Avon", "Beavercreek", "Eastgate", "Englewood", "Fairfield",
+    "Independence", "Lorain", "Parma", "Springboro", "Westwood", "Overhead",
+  ];
   const [rawData, setRawData] = useState(DEFAULT_DATA);
   const [selectedCenter, setSelectedCenter] = useState("All Centers");
   const [selectedCategory, setSelectedCategory] = useState("All Types");
@@ -206,7 +396,8 @@ export default function App() {
   const [sortDir, setSortDir] = useState("asc");
   const [noteModal, setNoteModal] = useState(null); // { key, note }
   const [activeTab, setActiveTab] = useState("home");
-  const [userRole, setUserRole] = useState("manager");
+  const [userRole, setUserRole] = useState("staff");
+  const [userPermissions, setUserPermissions] = useState({});
 
   // Saturday Calculator state
   const [calcCenter, setCalcCenter] = useState("");
@@ -342,7 +533,8 @@ export default function App() {
       .then(data => {
         if (data?.username) {
           setIsAuthenticated(true);
-          setUserRole(data.role || "manager");
+          setUserRole(data.role || "staff");
+          setUserPermissions(data.permissions || {});
         } else {
           setIsAuthenticated(false);
         }
@@ -367,9 +559,12 @@ export default function App() {
         body: JSON.stringify({ username: loginUsername, password: loginPassword }),
       });
       if (res.ok) {
-        const data = await res.json();
+        // Login only returns role — fetch full profile (with permissions) from /auth/me
+        const meRes = await fetch(`${API_BASE}/auth/me`, { credentials: "include" });
+        const meData = await meRes.json();
         setIsAuthenticated(true);
-        setUserRole(data.role || "manager");
+        setUserRole(meData.role || "staff");
+        setUserPermissions(meData.permissions || {});
         setLoginUsername("");
         setLoginPassword("");
       } else {
@@ -382,6 +577,7 @@ export default function App() {
 
   const handleRegister = async () => {
     setRegError("");
+    if (!regCenter) { setRegError("Please select your center."); return; }
     if (regPassword !== regConfirm) { setRegError("Passwords do not match."); return; }
     if (regPassword.length < 8) { setRegError("Password must be at least 8 characters."); return; }
     if (regUsername.trim().length < 3) { setRegError("Username must be at least 3 characters."); return; }
@@ -391,12 +587,13 @@ export default function App() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invite_code: regInviteCode, username: regUsername.trim(), password: regPassword }),
+        body: JSON.stringify({ invite_code: regInviteCode, username: regUsername.trim(), password: regPassword, center: regCenter }),
       });
       const data = await res.json();
       if (res.ok) {
         setIsAuthenticated(true);
-        setUserRole(data.role || "manager");
+        setUserRole(data.role || "staff");
+        setUserPermissions(data.permissions || {});
         setShowRegister(false);
       } else {
         setRegError(data.detail || "Registration failed. Try again.");
@@ -735,6 +932,15 @@ export default function App() {
                   autoComplete="off"
                   style={{ width: "100%", border: `1.5px solid ${regError && !regUsername ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: "#f8fafc", outline: "none", boxSizing: "border-box" }}
                 />
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Your Center</label>
+                <select
+                  value={regCenter}
+                  onChange={e => { setRegCenter(e.target.value); setRegError(""); }}
+                  style={{ width: "100%", border: `1.5px solid ${regError && !regCenter ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: "#f8fafc", outline: "none", boxSizing: "border-box", color: regCenter ? "#1e293b" : "#94a3b8" }}
+                >
+                  <option value="">Select your center...</option>
+                  {ECS_CENTERS.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
                 <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Choose a Username</label>
                 <input
                   type="text"
@@ -795,10 +1001,15 @@ export default function App() {
   // Manager role can only access the tracker module. Any other module tab
   // shows the Under Construction placeholder. Workspace tabs (faq, modules,
   // announcements, reports) remain accessible so sidebar nav still works.
+  // A module is accessible if: user is admin, OR their permissions explicitly allow it.
+  const canAccessModule = (moduleId) => {
+    if (userRole === "admin") return true;
+    return userPermissions[moduleId] === true;
+  };
+
   const showUnderConstruction =
-    userRole === "manager" &&
     MODULE_IDS.includes(activeTab) &&
-    activeTab !== "tracker";
+    !canAccessModule(activeTab);
   const underConstructionModuleName =
     (MODULES.find(m => m.id === activeTab) || {}).name || "This module";
 
@@ -1014,6 +1225,11 @@ export default function App() {
         </div>
       )}
 
+      {/* ADMIN PANEL */}
+      {activeTab === "admin-panel" && userRole === "admin" && (
+        <AdminPanel apiBase={API_BASE} modules={MODULES} />
+      )}
+
       {/* HOME PAGE */}
       {activeTab === "home" && (
         <div className="page-anim">
@@ -1047,18 +1263,16 @@ export default function App() {
           <p style={{ fontSize: 14, color: "var(--text-2)", margin: "0 0 32px", lineHeight: 1.5 }}>Tools and dashboards available to your team.</p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
             {MODULES.map(m => {
-              const canAccess = m.available || userRole === "admin";
+              const canAccess = canAccessModule(m.id);
               return (
               <div key={m.id}
                 className={`mod-card${canAccess ? "" : " locked"}`}
                 onClick={() => canAccess && setActiveTab(m.id)}
               >
-                {m.available ? (
+                {canAccess ? (
                   <span style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", background: "#dcfce7", color: "#166534", padding: "3px 8px", borderRadius: 4 }}>Active</span>
-                ) : canAccess ? (
-                  <span style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", background: "#eff6ff", color: "#1d4ed8", padding: "3px 8px", borderRadius: 4, border: "1px solid #bfdbfe" }}>Admin</span>
                 ) : (
-                  <span style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", background: "var(--bg-soft)", color: "var(--text-3)", padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border)" }}>Coming Soon</span>
+                  <span style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", background: "var(--bg-soft)", color: "var(--text-3)", padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border)" }}>Locked</span>
                 )}
                 <div style={{ width: 36, height: 36, borderRadius: 8, background: canAccess ? "var(--navy)" : "var(--bg-soft)", marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <div style={{ width: 14, height: 14, borderRadius: 3, background: canAccess ? "rgba(143,179,212,0.7)" : "var(--border)" }} />
