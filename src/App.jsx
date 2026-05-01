@@ -1313,18 +1313,6 @@ export default function App() {
         </div>
       )}
 
-      {/* ADMIN PANEL PAGE */}
-      {activeTab === "admin-panel" && userRole === "admin" && (
-        <div className="page-anim" style={{ padding: "52px 44px", maxWidth: 640 }}>
-          <p style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.7px", color: "var(--text-3)", margin: "0 0 8px" }}>Admin</p>
-          <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-1)", letterSpacing: "-0.4px", margin: "0 0 6px" }}>Admin Panel</h1>
-          <p style={{ fontSize: 14, color: "var(--text-2)", margin: "0 0 32px" }}>Administrative controls and system settings.</p>
-          <div style={{ background: "var(--bg-soft)", border: "1px solid var(--border)", borderRadius: 10, padding: "24px", textAlign: "center" }}>
-            <div style={{ fontSize: 13, color: "var(--text-3)" }}>Admin tools coming soon.</div>
-          </div>
-        </div>
-      )}
-
       {/* FAQ PAGE */}
       {activeTab === "faq" && (
         <div className="page-anim" style={{ maxWidth: 720, margin: "0 auto", padding: "40px 32px" }}>
