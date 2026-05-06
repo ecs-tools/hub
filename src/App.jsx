@@ -1321,7 +1321,7 @@ export default function App() {
           <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-1)", letterSpacing: "-0.4px", margin: "0 0 6px" }}>Operations Command Center</h1>
           <p style={{ fontSize: 14, color: "var(--text-2)", margin: "0 0 32px" }}>Live operational data and reporting managed by the operations team. Access requires a Google account associated with ECS.</p>
           <a
-            href="https://script.google.com/macros/s/AKfycbxcUPWjKOkWhBjvt7ewFCefo9u7O8Xk74FsMAZG_sOztGY-W-UmpbGbHp45wlFzRsRU1g/exec"
+            href="https://script.google.com/macros/s/AKfycbxhvM7Qfg4dysgz9S6EsB9H5VqS4IwA24YdpFzhEVougK_1aXF_96mvC8zp_9_IRdz9kQ/exec"
             target="_blank"
             rel="noopener noreferrer"
             style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "var(--navy)", color: "#fff", borderRadius: 8, padding: "12px 22px", fontSize: 14, fontWeight: 600, textDecoration: "none", letterSpacing: "-0.1px" }}
