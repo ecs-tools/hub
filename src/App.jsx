@@ -1,23 +1,34 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import * as XLSX from "https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs";
 import { CENTERS, CENTERS_WITH_ALL } from "./config/centers.js";
-import { CENTER_RATES, ACUITY_RATIOS } from "./config/rates.js";
+// CENTER_RATES and ACUITY_RATIOS are now used only in SaturdayCalculator.jsx
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import FleetDashboard from "./components/FleetDashboard.jsx";
 import UtilizationDashboard from "./components/UtilizationDashboard.jsx";
 import HomeDashboard from "./components/HomeDashboard.jsx";
 import BillingDashboard from "./components/BillingDashboard.jsx";
+import ProviderReportsDashboard from "./components/ProviderReportsDashboard.jsx";
+import LoginScreen from "./components/LoginScreen.jsx";
+import UploadModal from "./components/UploadModal.jsx";
+import NoteModal from "./components/NoteModal.jsx";
+import SaturdayCalculator from "./components/SaturdayCalculator.jsx";
 
+// `category` groups the cards on the Modules page. Order within a category
+// follows this array; the category sections render in MODULE_CATEGORIES order.
 const MODULES = [
-  { id: "tracker",     name: "Billing Error Detection", description: "Log and track weekly billing errors across transportation and attendance.", available: true },
-  { id: "billing",     name: "Billing Overview",        description: "Weekly, monthly, and total billing metrics.", available: true },
-  { id: "calculator",  name: "Saturday Calculator",     description: "Estimate staffing costs and profitability for Saturday programming.", available: false },
-  { id: "fleet",       name: "Fleet Dashboard",         description: "Monitor vehicle maintenance status and service history.", available: false },
-  { id: "utilization", name: "Utilization Tracker",     description: "Track PAWS funding utilization and alert when clients approach limits.", available: false },
+  { id: "tracker",     name: "Billing Error Detection", category: "Billing", description: "Log and track weekly billing errors across transportation and attendance.", available: true },
+  { id: "billing",     name: "Billing Overview",        category: "Billing", description: "Weekly, monthly, and total billing metrics.", available: true },
+  { id: "provider-reports", name: "Provider Reports",   category: "Billing", description: "DODD Medicaid billing reports (errors, claims, invoices, denied) by billing cycle.", available: true },
+  { id: "calculator",  name: "Saturday Calculator",     category: "Tools",   description: "Estimate staffing costs and profitability for Saturday programming.", available: false },
+  { id: "fleet",       name: "Fleet Dashboard",         category: "Reports", description: "Monitor vehicle maintenance status and service history.", available: false },
+  { id: "utilization", name: "Utilization Tracker",     category: "Reports", description: "Track PAWS funding utilization and alert when clients approach limits.", available: false },
 ];
 
+// Section order on the Modules page. A module whose category isn't listed here
+// falls into "Other" at the end, so nothing ever silently disappears.
+const MODULE_CATEGORIES = ["Billing", "Reports", "Tools"];
+
 const UPLOAD_PASSWORD = import.meta.env.VITE_UPLOAD_PASSWORD;
-const SHEET_URL = "https://sheetdb.io/api/v1/t91e5epi82udj";
 // Auth is now handled by the FastAPI backend (JWT cookie).
 // VITE_APP_PASSWORD and VITE_ADMIN_PASSWORD are no longer used here.
 const API_BASE = import.meta.env.VITE_API_BASE || "https://web-production-3b1f4.up.railway.app";
@@ -377,10 +388,6 @@ export default function App() {
   const [regError, setRegError] = useState("");
   const [regLoading, setRegLoading] = useState(false);
 
-  const ECS_CENTERS = [
-    "Avon", "Beavercreek", "Eastgate", "Englewood", "Fairfield",
-    "Independence", "Lorain", "Parma", "Springboro", "Westwood", "Overhead",
-  ];
   const [rawData, setRawData] = useState(DEFAULT_DATA);
   const [selectedCenter, setSelectedCenter] = useState("All Centers");
   const [selectedCategory, setSelectedCategory] = useState("All Types");
@@ -390,6 +397,12 @@ export default function App() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [noteInput, setNoteInput] = useState("");
   const [saving, setSaving] = useState(false);
+  // Per-key save mutex: tracks keys currently being written to SheetDB.
+  // If a second save arrives for the same key while one is in-flight, the
+  // latest value is stored here and applied as soon as the in-flight write
+  // finishes — eliminating the search-then-write race condition.
+  const saveInFlight = useRef({}); // key → true if a write is running
+  const savePending  = useRef({}); // key → { type, value } of the latest queued value
   const [loaded, setLoaded] = useState(false);
   const [toast, setToast] = useState(null);
   const [sortField, setSortField] = useState(null);
@@ -399,37 +412,7 @@ export default function App() {
   const [userRole, setUserRole] = useState("staff");
   const [userPermissions, setUserPermissions] = useState({});
 
-  // Saturday Calculator state
-  const [calcCenter, setCalcCenter] = useState("");
-  const [calcCounts, setCalcCounts] = useState({ A: "", B: "", C: "", CP: "" });
-  const [calcExtra, setCalcExtra] = useState(0);
-  const [calcSalary, setCalcSalary] = useState(0);
-
-  const CALC_OVERHEAD = 250;
-  const CALC_MIN_PROFIT = 500;
-  const CALC_THRESHOLD = 750;
-  const CALC_STAFF_COST = 17 * 7;
-  const calcRates = calcCenter ? CENTER_RATES[calcCenter] : null;
-  const calcResult = (() => {
-    if (!calcRates) return null;
-    const cA = parseInt(calcCounts.A) || 0;
-    const cB = parseInt(calcCounts.B) || 0;
-    const cC = parseInt(calcCounts.C) || 0;
-    const cCP = parseInt(calcCounts.CP) || 0;
-    const total = cA + cB + cC + cCP;
-    if (total === 0) return null;
-    const minStaff = Math.ceil(cA / ACUITY_RATIOS.A) + Math.ceil(cB / ACUITY_RATIOS.B) + Math.ceil(cC / ACUITY_RATIOS.C) + cCP;
-    const totalStaff = minStaff + (parseInt(calcExtra) || 0);
-    const salary = parseInt(calcSalary) || 0;
-    const hourlyStaff = Math.max(0, totalStaff - salary);
-    const revenue = cA * calcRates.A + cB * calcRates.B + (cC + cCP) * calcRates.C;
-    const staffCostTotal = hourlyStaff * CALC_STAFF_COST;
-    const totalExp = CALC_OVERHEAD + staffCostTotal;
-    const profit = revenue - totalExp;
-    const viable = profit >= CALC_MIN_PROFIT;
-    const pct = Math.min(100, Math.max(0, (profit / CALC_THRESHOLD) * 100));
-    return { cA, cB, cC, cCP, total, minStaff, totalStaff, salary, hourlyStaff, revenue, staffCostTotal, totalExp, profit, viable, pct };
-  })();
+  // Saturday Calculator state and logic have moved to SaturdayCalculator.jsx
   const [showUpload, setShowUpload] = useState(false);
   const [uploadPassword, setUploadPassword] = useState("");
   const [passwordError, setPasswordError] = useState(false);
@@ -441,48 +424,41 @@ export default function App() {
   const locations = ["All Centers", ...Array.from(new Set(rawData.map(r => centerName(r.location)))).filter(Boolean).sort()];
   const categories = ["All Types", ...Array.from(new Set(rawData.map(r => r.category))).filter(Boolean).sort()];
 
+  // Load error rows + per-row states from the FastAPI backend (was SheetDB).
+  // Requires a valid login cookie, so it runs once the user is authenticated.
   useEffect(() => {
+    if (!isAuthenticated) return;
     async function load() {
-      // Load statuses and notes
       try {
-        const res = await fetch(SHEET_URL);
-        const rows = await res.json();
-        if (Array.isArray(rows)) {
+        const res = await fetch(`${API_BASE}/api/errors`, { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
           const s = {}, n = {}, f = {};
-          rows.forEach(row => {
-            if (row.key === "__meta__") {
-              if (row.updatedAt) setLastUpdated(row.updatedAt);
-            } else if (row.key) {
-              if (row.status) s[row.key] = row.status;
-              if (row.note) n[row.key] = row.note;
-              if (row.flag === "true") f[row.key] = true;
-            }
+          Object.entries(data.states || {}).forEach(([key, st]) => {
+            if (st.status) s[key] = st.status;
+            if (st.note) n[key] = st.note;
+            if (st.flag) f[key] = true;
           });
           setStatuses(s);
           setNotes(n);
           setFlags(f);
-        }
-      } catch { /* ignore */ }
-
-      // Load error data from SheetDB — fall back to hardcoded if empty
-      try {
-        const res = await fetch(SHEET_URL + "?sheet=error_data");
-        const rows = await res.json();
-        if (Array.isArray(rows) && rows.length > 0) {
-          setRawData(rows.map(r => ({
-            name: r.name || "",
-            location: r.location || "",
-            date: r.date || "",
-            reason: r.reason || "",
-            category: r.category || "",
-          })));
+          if (data.updatedAt) setLastUpdated(data.updatedAt);
+          if (Array.isArray(data.rows)) {
+            setRawData(data.rows.map(r => ({
+              name: r.name || "",
+              location: r.location || "",
+              date: r.date || "",
+              reason: r.reason || "",
+              category: r.category || "",
+            })));
+          }
         }
       } catch { /* ignore */ }
 
       setLoaded(true);
     }
     load();
-  }, []);
+  }, [isAuthenticated]);
 
   // Inactivity timeout: after 1 hour of no activity, hit /auth/logout so the
   // cookie is cleared server-side and the user is returned to the login screen.
@@ -509,11 +485,11 @@ export default function App() {
     };
   }, [isAuthenticated, userRole]);
 
-  // SheetDB health check — fire-and-forget on mount
+  // Backend health check — fire-and-forget on mount
   useEffect(() => {
     const controller = new AbortController();
     const tid = setTimeout(() => controller.abort(), 5000);
-    fetch(SHEET_URL, { signal: controller.signal })
+    fetch(`${API_BASE}/api/health`, { signal: controller.signal })
       .then(res => {
         clearTimeout(tid);
         if (!res.ok) setSheetDbBannerVisible(true);
@@ -622,7 +598,6 @@ export default function App() {
     const file = e.target.files[0];
     if (!file) return;
     setUploading(true);
-    let deleteHappened = false;
     try {
       const { read, utils } = await import("https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs");
       const buf = await file.arrayBuffer();
@@ -652,54 +627,23 @@ export default function App() {
         return;
       }
 
-      const batchSize = 50;
-
-      // Write first batch as a connectivity test — existing data is NOT touched yet.
-      // If this fails, the user can safely re-try without any data loss.
-      const firstRes = await fetch(SHEET_URL + "?sheet=error_data", {
+      // Single atomic upload: the backend replaces all rows + clears states in
+      // one transaction, so a failure leaves the previous week's data intact.
+      const res = await fetch(`${API_BASE}/api/errors/upload`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ data: newData.slice(0, batchSize) }),
+        body: JSON.stringify({ rows: newData }),
       });
-      if (!firstRes.ok) {
-        const err = await firstRes.text();
-        console.error("SheetDB write failed: batch 0", err);
-        showToast("Warning: data may not have saved — check console");
+      if (!res.ok) {
+        console.error("Upload failed", res.status, await res.text().catch(() => ""));
+        showToast("Upload failed — your previous data is unchanged. Please try again.");
         setUploading(false);
         return;
       }
+      const result = await res.json();
 
-      // First batch confirmed live — now safe to clear the old data.
-      // (The test write above is removed along with the old data.)
-      await fetch(SHEET_URL + "/all?sheet=error_data", { method: "DELETE" });
-      deleteHappened = true;
-
-      // Write all batches (batch 0 included again since DELETE removed it).
-      for (let i = 0; i < newData.length; i += batchSize) {
-        const batch = newData.slice(i, i + batchSize);
-        const res = await fetch(SHEET_URL + "?sheet=error_data", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: batch }),
-        });
-        if (!res.ok) {
-          const err = await res.text();
-          console.error(`SheetDB write failed: batch ${Math.floor(i / batchSize)}`, err);
-          showToast("Upload failed mid-way — your error data may be incomplete. Please re-upload the file.");
-          setUploading(false);
-          return;
-        }
-      }
-
-      // All batches succeeded — clear statuses/notes and write __meta__.
-      await fetch(SHEET_URL + "/all", { method: "DELETE" });
-      const uploadedAt = new Date().toISOString();
-      await fetch(SHEET_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ data: { key: "__meta__", updatedAt: uploadedAt } }),
-      });
-      setLastUpdated(uploadedAt);
+      setLastUpdated(result.updatedAt || new Date().toISOString());
       setStatuses({});
       setNotes({});
       setFlags({});
@@ -712,82 +656,76 @@ export default function App() {
       showToast(`✅ Loaded ${newData.length} errors from ${file.name}`);
     } catch (err) {
       console.error("Upload error:", err);
-      if (deleteHappened) {
-        showToast("Upload failed mid-way — your error data may be incomplete. Please re-upload the file.");
-      } else {
-        showToast("Error reading file — make sure it's a valid .xlsx");
-      }
+      showToast("Error reading file — make sure it's a valid .xlsx");
     }
     setUploading(false);
   };
 
-  const saveStatus = useCallback(async (key, value) => {
-    setStatuses(prev => ({ ...prev, [key]: value }));
+  // ── Shared state write helper (FastAPI, was SheetDB) ────────────────────────
+  // Upserts {status, note, flag} for a single row key via the backend.
+  const _writeErrorState = useCallback(async (key, status, note, flag) => {
+    const res = await fetch(`${API_BASE}/api/errors/state`, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, status, note, flag: Boolean(flag) }),
+    });
+    if (!res.ok) throw new Error(`state save failed: ${res.status}`);
+  }, []);
+
+  // ── Race-safe save executor ──────────────────────────────────────────────────
+  // Runs the write for `key`. If another save for the same key arrives while
+  // this one is in-flight, it lands in savePending and is picked up automatically
+  // when this write completes — no two writes ever race for the same key.
+  const _flushSave = useCallback(async (key, statusVal, noteVal, flagVal) => {
+    if (saveInFlight.current[key]) {
+      // A write is already running — store latest values and bail.
+      savePending.current[key] = { status: statusVal, note: noteVal, flag: flagVal };
+      return;
+    }
+    saveInFlight.current[key] = true;
     setSaving(true);
     try {
-      const checkRes = await fetch(`${SHEET_URL}/search?key=${encodeURIComponent(key)}`);
-      const checkData = await checkRes.json();
-      if (Array.isArray(checkData) && checkData.length > 0) {
-        await fetch(`${SHEET_URL}/key/${encodeURIComponent(key)}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: { status: value, note: notes[key] || "", flag: String(flags[key] || false) } }),
-        });
-      } else {
-        await fetch(SHEET_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: { key, status: value, note: notes[key] || "", flag: "false", updatedAt: new Date().toISOString() } }),
-        });
+      await _writeErrorState(key, statusVal, noteVal, flagVal);
+      // If another value arrived while we were writing, flush it now.
+      if (savePending.current[key]) {
+        const next = savePending.current[key];
+        delete savePending.current[key];
+        // Run inline (still inside the in-flight lock) to preserve ordering.
+        await _writeErrorState(key, next.status, next.note, next.flag);
       }
-      showToast("Saved");
-    } catch { showToast("Save failed"); }
-    setSaving(false);
-  }, [notes, flags]);
+    } catch {
+      showToast("Save failed");
+    } finally {
+      delete saveInFlight.current[key];
+      setSaving(false);
+    }
+  }, [_writeErrorState]);
+
+  const saveStatus = useCallback(async (key, value) => {
+    const currentNote = notes[key] || "";
+    const currentFlag = flags[key] ?? false;
+    setStatuses(prev => ({ ...prev, [key]: value }));
+    setSaving(true);
+    await _flushSave(key, value, currentNote, currentFlag);
+    showToast("Saved");
+  }, [notes, flags, _flushSave]);
 
   const saveNote = useCallback(async (key, value) => {
+    const currentStatus = statuses[key] || "open";
+    const currentFlag   = flags[key] ?? false;
     setNotes(prev => ({ ...prev, [key]: value }));
-    try {
-      const checkRes = await fetch(`${SHEET_URL}/search?key=${encodeURIComponent(key)}`);
-      const checkData = await checkRes.json();
-      if (Array.isArray(checkData) && checkData.length > 0) {
-        await fetch(`${SHEET_URL}/key/${encodeURIComponent(key)}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: { note: value, status: statuses[key] || "open", flag: String(flags[key] || false) } }),
-        });
-      } else {
-        await fetch(SHEET_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: { key, status: statuses[key] || "open", note: value, flag: "false", updatedAt: new Date().toISOString() } }),
-        });
-      }
-    } catch { /* ignore */ }
+    await _flushSave(key, currentStatus, value, currentFlag);
     showToast("Note saved");
-  }, [statuses, flags]);
+  }, [statuses, flags, _flushSave]);
 
   const saveFlag = useCallback(async (key) => {
-    const newFlag = !(flags[key] ?? false);
+    const newFlag       = !(flags[key] ?? false);
+    const currentStatus = statuses[key] || "open";
+    const currentNote   = notes[key] || "";
     setFlags(prev => ({ ...prev, [key]: newFlag }));
-    try {
-      const checkRes = await fetch(`${SHEET_URL}/search?key=${encodeURIComponent(key)}`);
-      const checkData = await checkRes.json();
-      if (Array.isArray(checkData) && checkData.length > 0) {
-        await fetch(`${SHEET_URL}/key/${encodeURIComponent(key)}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: { flag: String(newFlag), status: statuses[key] || "open", note: notes[key] || "" } }),
-        });
-      } else {
-        await fetch(SHEET_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: { key, status: statuses[key] || "open", note: notes[key] || "", flag: String(newFlag), updatedAt: new Date().toISOString() } }),
-        });
-      }
-    } catch { /* ignore */ }
-  }, [flags, statuses, notes]);
+    await _flushSave(key, currentStatus, currentNote, newFlag);
+  }, [flags, statuses, notes, _flushSave]);
 
   const handleSort = (field) => {
     if (sortField === field) {
@@ -856,143 +794,23 @@ export default function App() {
 
   if (!isAuthenticated) {
     return (
-      <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0f172a 0%, #1a3a6b 55%, #0f172a 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', 'Segoe UI', sans-serif", position: "relative", overflow: "hidden" }}>
-        {/* Decorative background blobs */}
-        <div style={{ position: "absolute", width: 500, height: 500, borderRadius: "50%", background: "rgba(59,130,246,0.07)", top: -150, right: -150, pointerEvents: "none" }} />
-        <div style={{ position: "absolute", width: 350, height: 350, borderRadius: "50%", background: "rgba(99,179,237,0.06)", bottom: -100, left: -100, pointerEvents: "none" }} />
-        <div style={{ position: "absolute", width: 180, height: 180, borderRadius: "50%", background: "rgba(147,197,253,0.05)", top: "38%", left: "12%", pointerEvents: "none" }} />
-        <div style={{ position: "absolute", width: 120, height: 120, borderRadius: "50%", background: "rgba(59,130,246,0.06)", bottom: "25%", right: "14%", pointerEvents: "none" }} />
-
-        {/* Card */}
-        <div style={{ background: "white", borderRadius: 20, border: "1px solid rgba(226,232,240,0.8)", padding: "44px 40px 36px", width: "100%", maxWidth: 420, boxShadow: "0 30px 80px rgba(0,0,0,0.45)", textAlign: "center", position: "relative", zIndex: 1 }}>
-
-          {/* Logo + branding */}
-          <img src={LOGO} alt="ECS" style={{ width: 68, height: 68, borderRadius: 16, marginBottom: 14, boxShadow: "0 4px 20px rgba(0,0,0,0.15)" }} />
-          <div style={{ fontSize: 26, fontWeight: 800, color: "#0f172a", letterSpacing: "-0.5px", marginBottom: 4 }}>ECS Hub</div>
-          <div style={{ fontSize: 13, color: "#64748b", marginBottom: 28 }}>Empowered Community Services</div>
-
-          {!showRegister ? (
-            <>
-              {/*
-                autocomplete="username" and autocomplete="current-password" are the
-                magic attributes that tell Chrome/Edge/Safari to offer to save these
-                credentials and autofill them on the next visit.
-              */}
-              <form onSubmit={e => { e.preventDefault(); handleLogin(); }} style={{ textAlign: "left" }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Username</label>
-                <input
-                  type="text"
-                  name="username"
-                  value={loginUsername}
-                  onChange={e => { setLoginUsername(e.target.value); setLoginError(""); }}
-                  placeholder="Enter your username"
-                  autoFocus
-                  autoComplete="username"
-                  style={{ width: "100%", border: `1.5px solid ${loginError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: loginError ? "#fff8f8" : "#f8fafc", outline: "none", boxSizing: "border-box" }}
-                />
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Password</label>
-                <input
-                  type="password"
-                  name="password"
-                  value={loginPassword}
-                  onChange={e => { setLoginPassword(e.target.value); setLoginError(""); }}
-                  placeholder="Enter your password"
-                  autoComplete="current-password"
-                  style={{ width: "100%", border: `1.5px solid ${loginError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 10, background: loginError ? "#fff8f8" : "#f8fafc", outline: "none", boxSizing: "border-box" }}
-                />
-                {loginError && <div style={{ fontSize: 12, color: "#dc2626", marginBottom: 10 }}>{loginError}</div>}
-                <button
-                  type="submit"
-                  style={{ width: "100%", background: "linear-gradient(135deg, #3b82f6, #1d4ed8)", color: "white", border: "none", borderRadius: 10, padding: "13px", fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 14px rgba(59,130,246,0.4)", marginTop: 4 }}
-                >
-                  Sign In
-                </button>
-              </form>
-              <div style={{ marginTop: 16, textAlign: "center" }}>
-                <button
-                  onClick={() => { setShowRegister(true); setLoginError(""); }}
-                  style={{ background: "none", border: "none", color: "#3b82f6", fontSize: 13, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}
-                >
-                  First time? Create your account
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>Create Your Account</div>
-              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 20 }}>Enter the invite code from your manager, then pick a username and password.</div>
-              <form onSubmit={e => { e.preventDefault(); handleRegister(); }} style={{ textAlign: "left" }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Invite Code</label>
-                <input
-                  type="password"
-                  value={regInviteCode}
-                  onChange={e => { setRegInviteCode(e.target.value); setRegError(""); }}
-                  placeholder="Enter invite code"
-                  autoFocus
-                  autoComplete="off"
-                  style={{ width: "100%", border: `1.5px solid ${regError && !regUsername ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: "#f8fafc", outline: "none", boxSizing: "border-box" }}
-                />
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Your Center</label>
-                <select
-                  value={regCenter}
-                  onChange={e => { setRegCenter(e.target.value); setRegError(""); }}
-                  style={{ width: "100%", border: `1.5px solid ${regError && !regCenter ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: "#f8fafc", outline: "none", boxSizing: "border-box", color: regCenter ? "#1e293b" : "#94a3b8" }}
-                >
-                  <option value="">Select your center...</option>
-                  {ECS_CENTERS.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Choose a Username</label>
-                <input
-                  type="text"
-                  name="username"
-                  value={regUsername}
-                  onChange={e => { setRegUsername(e.target.value); setRegError(""); }}
-                  placeholder="e.g. sarah_jones"
-                  autoComplete="username"
-                  style={{ width: "100%", border: `1.5px solid ${regError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: "#f8fafc", outline: "none", boxSizing: "border-box" }}
-                />
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Choose a Password</label>
-                <input
-                  type="password"
-                  name="new-password"
-                  value={regPassword}
-                  onChange={e => { setRegPassword(e.target.value); setRegError(""); }}
-                  placeholder="At least 8 characters"
-                  autoComplete="new-password"
-                  style={{ width: "100%", border: `1.5px solid ${regError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: "#f8fafc", outline: "none", boxSizing: "border-box" }}
-                />
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Confirm Password</label>
-                <input
-                  type="password"
-                  value={regConfirm}
-                  onChange={e => { setRegConfirm(e.target.value); setRegError(""); }}
-                  placeholder="Re-enter your password"
-                  autoComplete="new-password"
-                  style={{ width: "100%", border: `1.5px solid ${regError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 10, background: "#f8fafc", outline: "none", boxSizing: "border-box" }}
-                />
-                {regError && <div style={{ fontSize: 12, color: "#dc2626", marginBottom: 10 }}>{regError}</div>}
-                <button
-                  type="submit"
-                  disabled={regLoading}
-                  style={{ width: "100%", background: regLoading ? "#93c5fd" : "linear-gradient(135deg, #3b82f6, #1d4ed8)", color: "white", border: "none", borderRadius: 10, padding: "13px", fontSize: 15, fontWeight: 700, cursor: regLoading ? "default" : "pointer", boxShadow: "0 4px 14px rgba(59,130,246,0.4)", marginTop: 4 }}
-                >
-                  {regLoading ? "Creating account…" : "Create Account"}
-                </button>
-              </form>
-              <div style={{ marginTop: 16, textAlign: "center" }}>
-                <button
-                  onClick={() => { setShowRegister(false); setRegError(""); setRegInviteCode(""); setRegUsername(""); setRegPassword(""); setRegConfirm(""); }}
-                  style={{ background: "none", border: "none", color: "#64748b", fontSize: 13, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}
-                >
-                  ← Back to Sign In
-                </button>
-              </div>
-            </>
-          )}
-
-          <div style={{ marginTop: 24, fontSize: 11, color: "#94a3b8" }}>Empowered Community Services © 2025</div>
-        </div>
-      </div>
+      <LoginScreen
+        LOGO={LOGO}
+        showRegister={showRegister}
+        setShowRegister={v => { setShowRegister(v); setLoginError(""); setRegError(""); if (!v) { setRegInviteCode(""); setRegUsername(""); setRegPassword(""); setRegConfirm(""); } }}
+        loginUsername={loginUsername} setLoginUsername={v => { setLoginUsername(v); setLoginError(""); }}
+        loginPassword={loginPassword} setLoginPassword={v => { setLoginPassword(v); setLoginError(""); }}
+        loginError={loginError}
+        onLogin={handleLogin}
+        regInviteCode={regInviteCode} setRegInviteCode={v => { setRegInviteCode(v); setRegError(""); }}
+        regCenter={regCenter} setRegCenter={v => { setRegCenter(v); setRegError(""); }}
+        regUsername={regUsername} setRegUsername={v => { setRegUsername(v); setRegError(""); }}
+        regPassword={regPassword} setRegPassword={v => { setRegPassword(v); setRegError(""); }}
+        regConfirm={regConfirm} setRegConfirm={v => { setRegConfirm(v); setRegError(""); }}
+        regError={regError}
+        regLoading={regLoading}
+        onRegister={handleRegister}
+      />
     );
   }
 
@@ -1189,41 +1007,16 @@ export default function App() {
 
       {/* Upload Modal */}
       {showUpload && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
-          <div style={{ background: "white", borderRadius: 16, padding: 32, width: 420, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
-            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Upload New Week</div>
-            <div style={{ fontSize: 13, color: "#64748b", marginBottom: 24 }}>This will replace all current data and reset all statuses.</div>
-            {!passwordOk ? (
-              <>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>Enter upload password</label>
-                <input
-                  type="password"
-                  value={uploadPassword}
-                  onChange={e => { setUploadPassword(e.target.value); setPasswordError(false); }}
-                  onKeyDown={e => e.key === "Enter" && handlePasswordCheck()}
-                  placeholder="Password"
-                  style={{ width: "100%", border: `1.5px solid ${passwordError ? "#ef4444" : "#e2e8f0"}`, borderRadius: 8, padding: "9px 12px", fontSize: 14, marginBottom: 6 }}
-                />
-                {passwordError && <div style={{ color: "#ef4444", fontSize: 12, marginBottom: 8 }}>Incorrect password</div>}
-                <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                  <button onClick={handlePasswordCheck} style={{ flex: 1, background: "#3b82f6", color: "white", border: "none", borderRadius: 8, padding: "9px", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Continue</button>
-                  <button onClick={() => setShowUpload(false)} style={{ flex: 1, background: "#f1f5f9", color: "#374151", border: "none", borderRadius: 8, padding: "9px", fontSize: 14, cursor: "pointer" }}>Cancel</button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={{ border: "2px dashed #cbd5e1", borderRadius: 12, padding: 32, textAlign: "center", cursor: "pointer", background: "#f8fafc" }}
-                  onClick={() => fileRef.current?.click()}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Click to select your Excel file</div>
-                  <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>.xlsx files only</div>
-                  <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleFileUpload} />
-                </div>
-                {uploading && <div style={{ textAlign: "center", marginTop: 16, color: "#3b82f6", fontSize: 14 }}>Processing file…</div>}
-                <button onClick={() => setShowUpload(false)} style={{ width: "100%", marginTop: 12, background: "#f1f5f9", color: "#374151", border: "none", borderRadius: 8, padding: "9px", fontSize: 14, cursor: "pointer" }}>Cancel</button>
-              </>
-            )}
-          </div>
-        </div>
+        <UploadModal
+          uploadPassword={uploadPassword} setUploadPassword={setUploadPassword}
+          passwordError={passwordError} setPasswordError={setPasswordError}
+          passwordOk={passwordOk}
+          uploading={uploading}
+          fileRef={fileRef}
+          onPasswordCheck={handlePasswordCheck}
+          onFileChange={handleFileUpload}
+          onClose={() => setShowUpload(false)}
+        />
       )}
 
       {/* ADMIN PANEL */}
@@ -1262,31 +1055,42 @@ export default function App() {
           <p style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.7px", color: "var(--text-3)", margin: "0 0 8px" }}>Platform</p>
           <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-1)", letterSpacing: "-0.4px", margin: "0 0 6px", lineHeight: 1.2 }}>Modules</h1>
           <p style={{ fontSize: 14, color: "var(--text-2)", margin: "0 0 32px", lineHeight: 1.5 }}>Tools and dashboards available to your team.</p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
-            {MODULES.map(m => {
-              const canAccess = canAccessModule(m.id);
-              return (
-              <div key={m.id}
-                className={`mod-card${canAccess ? "" : " locked"}`}
-                onClick={() => canAccess && setActiveTab(m.id)}
-              >
-                {canAccess ? (
-                  <span style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", background: "#dcfce7", color: "#166534", padding: "3px 8px", borderRadius: 4 }}>Active</span>
-                ) : (
-                  <span style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", background: "var(--bg-soft)", color: "var(--text-3)", padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border)" }}>Locked</span>
-                )}
-                <div style={{ width: 36, height: 36, borderRadius: 8, background: canAccess ? "var(--navy)" : "var(--bg-soft)", marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <div style={{ width: 14, height: 14, borderRadius: 3, background: canAccess ? "rgba(143,179,212,0.7)" : "var(--border)" }} />
+          {[...MODULE_CATEGORIES, "Other"].map(cat => {
+            const mods = MODULES.filter(
+              m => (MODULE_CATEGORIES.includes(m.category) ? m.category : "Other") === cat
+            );
+            if (!mods.length) return null;
+            return (
+              <div key={cat} style={{ marginBottom: 28 }}>
+                <p style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.7px", color: "var(--text-3)", margin: "0 0 12px", paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>{cat}</p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
+                  {mods.map(m => {
+                    const canAccess = canAccessModule(m.id);
+                    return (
+                    <div key={m.id}
+                      className={`mod-card${canAccess ? "" : " locked"}`}
+                      onClick={() => canAccess && setActiveTab(m.id)}
+                    >
+                      {canAccess ? (
+                        <span style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", background: "#dcfce7", color: "#166534", padding: "3px 8px", borderRadius: 4 }}>Active</span>
+                      ) : (
+                        <span style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", background: "var(--bg-soft)", color: "var(--text-3)", padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border)" }}>Locked</span>
+                      )}
+                      <div style={{ width: 36, height: 36, borderRadius: 8, background: canAccess ? "var(--navy)" : "var(--bg-soft)", marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <div style={{ width: 14, height: 14, borderRadius: 3, background: canAccess ? "rgba(143,179,212,0.7)" : "var(--border)" }} />
+                      </div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-1)", marginBottom: 5 }}>{m.name}</div>
+                      <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>{m.description}</div>
+                      {canAccess && (
+                        <div style={{ marginTop: 16, fontSize: 12, fontWeight: 700, color: "var(--navy)", letterSpacing: "-0.1px" }}>Open &rarr;</div>
+                      )}
+                    </div>
+                    );
+                  })}
                 </div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-1)", marginBottom: 5 }}>{m.name}</div>
-                <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>{m.description}</div>
-                {canAccess && (
-                  <div style={{ marginTop: 16, fontSize: 12, fontWeight: 700, color: "var(--navy)", letterSpacing: "-0.1px" }}>Open &rarr;</div>
-                )}
               </div>
-              );
-            })}
-          </div>
+            );
+          })}
         </div>
       )}
 
@@ -1321,7 +1125,7 @@ export default function App() {
           <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-1)", letterSpacing: "-0.4px", margin: "0 0 6px" }}>Operations Command Center</h1>
           <p style={{ fontSize: 14, color: "var(--text-2)", margin: "0 0 32px" }}>Live operational data and reporting managed by the operations team. Access requires a Google account associated with ECS.</p>
           <a
-            href="https://script.google.com/macros/s/AKfycbxhvM7Qfg4dysgz9S6EsB9H5VqS4IwA24YdpFzhEVougK_1aXF_96mvC8zp_9_IRdz9kQ/exec"
+            href="https://script.google.com/macros/s/AKfycbwqijyJOT4DDTX1VQ3FkP-eKltx1DIThL09QNL-IbK2glP25BNsIr26mR3ARHa5JUwkyg/exec"
             target="_blank"
             rel="noopener noreferrer"
             style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "var(--navy)", color: "#fff", borderRadius: 8, padding: "12px 22px", fontSize: 14, fontWeight: 600, textDecoration: "none", letterSpacing: "-0.1px" }}
@@ -1344,8 +1148,11 @@ export default function App() {
           </div>
 
           {[
+            { section: "Home Dashboard", items: [
+              { q: "What does the Home page show?", a: (<ul style={{ paddingLeft: 18, marginTop: 6 }}><li style={{ marginBottom: 4 }}>The Home page is your billing-error command center — it's the first thing you see when you sign in.</li><li style={{ marginBottom: 4 }}>The four cards at the top show <strong>Open Billing Errors</strong>, errors logged <strong>This Week</strong> and <strong>This Month</strong>, and your overall <strong>Resolution Rate</strong>. Click any card to jump straight into the Error Tracker.</li><li style={{ marginBottom: 4 }}>Below the cards, the <strong>Billing Error Summary</strong> shows resolution progress plus a breakdown of errors by <strong>Center</strong> and by <strong>Type</strong>.</li></ul>) },
+            ]},
             { section: "Error Tracker", items: [
-              { q: "What do the error statuses mean?", a: (<ul style={{ paddingLeft: 18, marginTop: 6 }}><li style={{ marginBottom: 4 }}><strong>Open</strong> — Not yet reviewed. Default for all new errors.</li><li style={{ marginBottom: 4 }}><strong>In Progress</strong> — You are actively working on resolving this.</li><li style={{ marginBottom: 4 }}><strong>Not an Error</strong> — Reviewed and disputed or not applicable.</li><li style={{ marginBottom: 4 }}><strong>Fixed</strong> — Resolved and corrected.</li></ul>) },
+              { q: "What do the error statuses mean?", a: (<ul style={{ paddingLeft: 18, marginTop: 6 }}><li style={{ marginBottom: 4 }}><strong>Open</strong> — Not yet reviewed. Default for all new errors.</li><li style={{ marginBottom: 4 }}><strong>Not an Error</strong> — Reviewed and found to be a dispute or not applicable (shown as “Disputed” in the counts).</li><li style={{ marginBottom: 4 }}><strong>Fixed</strong> — Resolved and corrected.</li></ul>) },
             ]},
             { section: "Saturday Calculator", items: [
               { q: "How do I use the Saturday Calculator?", a: (<ul style={{ paddingLeft: 18, marginTop: 6 }}><li style={{ marginBottom: 4 }}>Select your center — rates load automatically.</li><li style={{ marginBottom: 4 }}>Enter A, B, C, and C+ acuity client counts.</li><li style={{ marginBottom: 4 }}>Minimum required staff calculates automatically.</li><li style={{ marginBottom: 4 }}>Add extra staff if needed. Salary staff count toward ratio but not cost.</li><li style={{ marginBottom: 4 }}>Result shows ✅ Good to Go or ❌ Not Viable.</li></ul>) },
@@ -1427,156 +1234,9 @@ export default function App() {
 
       {activeTab === "calculator" && !showUnderConstruction && (
         <ErrorBoundary moduleName="Saturday Calculator">
-        <div style={{ padding: "32px 24px" }}>
-          <div style={{ maxWidth: 760, margin: "0 auto" }}>
-            <div style={{ marginBottom: 28 }}>
-              <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.4px", color: "var(--text-1)" }}>Saturday Calculator</div>
-              <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>Select your center and enter client counts to see if a Saturday outing is financially viable.</div>
-            </div>
-
-            {/* Center selector */}
-            <div style={{ background: "white", borderRadius: 12, border: "1.5px solid #e2e8f0", padding: "18px 20px", marginBottom: 16, boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>Select Your Center</div>
-              <select value={calcCenter} onChange={e => setCalcCenter(e.target.value)}
-                style={{ width: "100%", border: "1.5px solid #e2e8f0", borderRadius: 8, padding: "10px 12px", fontSize: 15, fontWeight: 600, background: "white", cursor: "pointer" }}>
-                <option value="">— Choose a center —</option>
-                {CENTERS.map(c => <option key={c}>{c}</option>)}
-              </select>
-              {calcRates && (
-                <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                  {[["A","#0369a1","#f0f9ff","#bae6fd"],["B","#d97706","#fffbeb","#fde68a"],["C","#dc2626","#fff1f2","#fecdd3"]].map(([a,color,bg,border]) => (
-                    <div key={a} style={{ flex: 1, background: bg, borderRadius: 8, padding: "8px 12px", textAlign: "center", border: `1px solid ${border}` }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: "0.5px" }}>{a} Acuity</div>
-                      <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: "#1e293b", marginTop: 2 }}>${calcRates[a].toFixed(2)}</div>
-                      <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 1 }}>per client</div>
-                    </div>
-                  ))}
-                  <div style={{ flex: 1, background: "#f5f3ff", borderRadius: 8, padding: "8px 12px", textAlign: "center", border: "1px solid #ddd6fe" }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", textTransform: "uppercase", letterSpacing: "0.5px" }}>C+ Acuity</div>
-                    <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: "#7c3aed", marginTop: 2 }}>${calcRates.C.toFixed(2)}</div>
-                    <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 1 }}>per client · 1:1</div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {calcCenter && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
-                {/* Left column */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  {/* Client counts */}
-                  <div style={{ background: "white", borderRadius: 12, border: "1.5px solid #e2e8f0", padding: "18px 20px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 14 }}>Client Counts</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                      {[
-                        { key: "A", label: "A Acuity", desc: "1 staff per 10 clients", color: "#0369a1", bg: "#f0f9ff", border: "#bae6fd" },
-                        { key: "B", label: "B Acuity", desc: "1 staff per 6 clients", color: "#d97706", bg: "#fffbeb", border: "#fde68a" },
-                        { key: "C", label: "C Acuity", desc: "1 staff per 3 clients", color: "#dc2626", bg: "#fff1f2", border: "#fecdd3" },
-                        { key: "CP", label: "C+ Acuity", desc: "1:1 ratio · same rate as C", color: "#7c3aed", bg: "#f5f3ff", border: "#ddd6fe" },
-                      ].map(({ key, label, desc, color, bg, border }) => (
-                        <div key={key} style={{ display: "flex", alignItems: "center", gap: 12, background: bg, border: `1.5px solid ${border}`, borderRadius: 10, padding: "12px 14px" }}>
-                          <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: 13, fontWeight: 700, color }}>{label}</div>
-                            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>{desc}</div>
-                          </div>
-                          <input type="number" min="0" placeholder="0" value={calcCounts[key]}
-                            onChange={e => setCalcCounts(prev => ({ ...prev, [key]: e.target.value }))}
-                            style={{ width: 64, border: `1.5px solid ${border}`, borderRadius: 8, padding: 8, fontSize: 18, fontWeight: 700, fontFamily: "'DM Mono', monospace", color, textAlign: "center", background: "white" }} />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Staffing */}
-                  <div style={{ background: "white", borderRadius: 12, border: "1.5px solid #e2e8f0", padding: "18px 20px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 14 }}>Staffing</div>
-                    {calcResult && (
-                      <div style={{ background: "#f8fafc", borderRadius: 8, padding: "10px 14px", marginBottom: 12, border: "1px solid #e2e8f0" }}>
-                        <div style={{ fontSize: 12, color: "#64748b" }}>Minimum required staff based on client ratios</div>
-                        <div style={{ fontSize: 24, fontWeight: 800, fontFamily: "'DM Mono', monospace", color: "#1e293b", marginTop: 2 }}>{calcResult.minStaff} staff</div>
-                      </div>
-                    )}
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>Additional staff</div>
-                        <div style={{ fontSize: 11, color: "#94a3b8" }}>Beyond the minimum</div>
-                      </div>
-                      <input type="number" min="0" value={calcExtra} onChange={e => setCalcExtra(e.target.value)}
-                        style={{ width: 64, border: "1.5px solid #e2e8f0", borderRadius: 8, padding: 8, fontSize: 18, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: "#1e293b", textAlign: "center" }} />
-                    </div>
-                    <div style={{ borderTop: "1px solid #f1f5f9", paddingTop: 10 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>Salary / Non-hourly staff</div>
-                          <div style={{ fontSize: 11, color: "#94a3b8" }}>Fills ratio requirement — no $119 cost</div>
-                        </div>
-                        <input type="number" min="0" value={calcSalary} onChange={e => setCalcSalary(e.target.value)}
-                          style={{ width: 64, border: "1.5px solid #ddd6fe", borderRadius: 8, padding: 8, fontSize: 18, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: "#7c3aed", textAlign: "center", background: "#f5f3ff" }} />
-                      </div>
-                    </div>
-                    <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 10 }}>$17/hr × 7 hrs = $119 per hourly staff member</div>
-                  </div>
-                </div>
-
-                {/* Right column — result */}
-                <div style={{ position: "sticky", top: 24 }}>
-                  <div style={{ background: "white", borderRadius: 16, border: `2px solid ${!calcResult ? "#e2e8f0" : calcResult.viable ? "#86efac" : "#fca5a5"}`, padding: 24, boxShadow: "0 4px 20px rgba(0,0,0,0.06)", textAlign: "center" }}>
-                    {!calcResult ? (
-                      <div style={{ padding: "40px 0" }}>
-                        <div style={{ fontSize: 13, color: "#94a3b8", fontWeight: 500 }}>Enter client counts to see your result</div>
-                      </div>
-                    ) : (
-                      <>
-                        <div style={{ marginBottom: 20 }}>
-                          <div style={{ display: "inline-block", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", padding: "3px 10px", borderRadius: 4, marginBottom: 8, background: calcResult.viable ? "#dcfce7" : "#fee2e2", color: calcResult.viable ? "#166534" : "#991b1b" }}>{calcResult.viable ? "Viable" : "Not Viable"}</div>
-                          <div style={{ fontSize: 20, fontWeight: 700, color: calcResult.viable ? "#16a34a" : "#dc2626" }}>{calcResult.viable ? "Good to Go!" : "Doesn't Clear Minimum"}</div>
-                          <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
-                            {calcResult.viable
-                              ? `Clears the $500 minimum by $${(calcResult.profit - 500).toLocaleString("en-US", { minimumFractionDigits: 2 })}`
-                              : `$${(500 - calcResult.profit).toLocaleString("en-US", { minimumFractionDigits: 2 })} short of the $500 minimum`}
-                          </div>
-                        </div>
-                        <div style={{ marginBottom: 20 }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#94a3b8", marginBottom: 4 }}>
-                            <span>$0</span><span>$750 target</span>
-                          </div>
-                          <div style={{ background: "#f1f5f9", borderRadius: 100, height: 10, overflow: "hidden" }}>
-                            <div style={{ height: "100%", borderRadius: 100, width: `${calcResult.pct}%`, background: calcResult.viable ? "#16a34a" : "#ef4444", transition: "width 0.4s ease" }} />
-                          </div>
-                        </div>
-                        <div style={{ background: "#f8fafc", borderRadius: 10, padding: "14px 16px", fontSize: 13, textAlign: "left", marginBottom: 14 }}>
-                          {[
-                            { label: `Revenue (${calcResult.total} clients)`, val: calcResult.revenue, color: "#0369a1" },
-                            { label: "Overhead", val: -250, color: "#dc2626" },
-                            { label: `Staff (${calcResult.hourlyStaff} hourly${calcResult.salary > 0 ? ` + ${calcResult.salary} salary` : ""} × $119)`, val: -calcResult.staffCostTotal, color: "#dc2626" },
-                          ].map(({ label, val, color }) => (
-                            <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}>
-                              <span style={{ color: "#64748b" }}>{label}</span>
-                              <span style={{ fontFamily: "'DM Mono', monospace", color, fontWeight: 500 }}>{val < 0 ? "-" : ""}${Math.abs(val).toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
-                            </div>
-                          ))}
-                          <div style={{ borderTop: "1px solid #e2e8f0", margin: "8px 0" }} />
-                          <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}>
-                            <span style={{ color: "#64748b", fontWeight: 700 }}>Net Profit</span>
-                            <span style={{ fontFamily: "'DM Mono', monospace", color: calcResult.viable ? "#16a34a" : "#dc2626", fontWeight: 700 }}>${calcResult.profit.toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
-                          </div>
-                        </div>
-                        <div style={{ display: "flex", gap: 8 }}>
-                          {[["A", calcResult.cA, "#0369a1", "#f0f9ff"], ["B", calcResult.cB, "#d97706", "#fffbeb"], ["C", calcResult.cC, "#dc2626", "#fff1f2"], ["C+", calcResult.cCP, "#7c3aed", "#f5f3ff"]].map(([label, count, color, bg]) => (
-                            <div key={label} style={{ flex: 1, background: bg, borderRadius: 8, padding: 8, textAlign: "center" }}>
-                              <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'DM Mono', monospace", color }}>{count}</div>
-                              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600 }}>{label}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
+          <div className="page-anim">
+            <SaturdayCalculator />
           </div>
-        </div>
         </ErrorBoundary>
       )}
 
@@ -1735,34 +1395,26 @@ export default function App() {
       </div></ErrorBoundary>}
 
       {/* Note Modal */}
-      {noteModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9998 }}
-          onClick={e => e.target === e.currentTarget && setNoteModal(null)}>
-          <div style={{ background: "white", borderRadius: 16, padding: 28, width: 480, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
-            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4, color: "#1e293b" }}>Note</div>
-            <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 16 }}>Click outside to close without saving</div>
-            <textarea
-              autoFocus
-              rows={5}
-              defaultValue={noteModal.note}
-              onChange={e => setNoteInput(e.target.value)}
-              placeholder="Add a note..."
-              style={{ width: "100%", border: "1.5px solid #3b82f6", borderRadius: 8, padding: "10px 12px", fontSize: 14, resize: "vertical", fontFamily: "inherit", boxSizing: "border-box" }}
-            />
-            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              <button onClick={() => { saveNote(noteModal.key, noteInput !== undefined ? noteInput : noteModal.note); setNoteModal(null); }}
-                style={{ flex: 1, background: "#3b82f6", color: "white", border: "none", borderRadius: 8, padding: "9px", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Save</button>
-              <button onClick={() => setNoteModal(null)}
-                style={{ flex: 1, background: "#f1f5f9", color: "#374151", border: "none", borderRadius: 8, padding: "9px", fontSize: 14, cursor: "pointer" }}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <NoteModal
+        noteModal={noteModal}
+        noteInput={noteInput}
+        setNoteInput={setNoteInput}
+        onSave={() => { saveNote(noteModal.key, noteInput !== undefined ? noteInput : noteModal.note); setNoteModal(null); }}
+        onClose={() => setNoteModal(null)}
+      />
 
       {activeTab === "billing" && !showUnderConstruction && (
         <div className="page-anim">
           <ErrorBoundary moduleName="Billing Overview">
             <BillingDashboard onBack={() => setActiveTab("home")} userRole={userRole} />
+          </ErrorBoundary>
+        </div>
+      )}
+
+      {activeTab === "provider-reports" && !showUnderConstruction && (
+        <div className="page-anim">
+          <ErrorBoundary moduleName="Provider Reports">
+            <ProviderReportsDashboard onBack={() => setActiveTab("home")} userRole={userRole} />
           </ErrorBoundary>
         </div>
       )}

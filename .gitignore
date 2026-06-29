@@ -29,3 +29,10 @@ dist-ssr
 # Environment variables — never commit these
 .env
 .env.*
+
+# Local agent / editor state
+.claude/
+
+# Client data — contains real client names + billing (PII). Never commit.
+# The app reads billing from the API at runtime, not this file.
+public/billing_data.json

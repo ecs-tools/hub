@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 
-const API = import.meta.env.VITE_BILLING_API_URL || "http://localhost:8000";
+const API = import.meta.env.VITE_BILLING_API_URL || "https://web-production-3b1f4.up.railway.app";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmt$(n) {
@@ -150,6 +150,8 @@ export default function BillingDashboard({ userRole = "manager" }) {
   const [weekly, setWeekly]       = useState([]);
   const [errors, setErrors]       = useState([]);
   const [earlyDepartures, setED]  = useState([]);   // admin-only review flag
+  const [dailyRate, setDailyRate] = useState(null); // { weeks:[], ytd:{} }
+  const [arBuckets, setArBuckets] = useState([]);   // AR by bucket
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState(null);
   const [tab, setTab]             = useState("overview");   // overview | weekly | errors | early-departures
@@ -168,25 +170,40 @@ export default function BillingDashboard({ userRole = "manager" }) {
     setError(null);
     const qs = buildQS();
     try {
-      // Always-on endpoints
-      const corePromises = [
-        fetch(`${API}/api/billing/summary${qs}`).then(r => r.json()),
-        fetch(`${API}/api/billing/by-center${qs}`).then(r => r.json()),
-        fetch(`${API}/api/billing/weekly${qs}`).then(r => r.json()),
-        fetch(`${API}/api/billing/errors${qs}`).then(r => r.json()),
-      ];
-      // Admin-only — skip the call entirely for non-admins so we don't
-      // even hit the endpoint from staff browsers.
-      if (userRole === "admin") {
-        corePromises.push(fetch(`${API}/api/billing/early-departures${qs}`).then(r => r.json()));
+      // Always-on endpoints — use allSettled so one slow/failing endpoint
+      // doesn't blank the whole dashboard.
+      // Resilient fetch: credentials:"include" sends the auth cookie cross-origin
+      // (empoweredis.com -> Railway). Each call resolves to its JSON, or to null on
+      // ANY failure (non-2xx, network blip during a redeploy, non-JSON 500 body) —
+      // it never rejects, so one bad endpoint can't nuke the whole dashboard.
+      const getJSON = (path) =>
+        fetch(`${API}${path}${qs}`, { credentials: "include" })
+          .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
+          .catch(() => null);
+      const asArr = (v) => (Array.isArray(v) ? v : []);
+
+      const [sum, cen, wk, errs, dr, arb, ed] = await Promise.all([
+        getJSON("/api/billing/summary"),
+        getJSON("/api/billing/by-center"),
+        getJSON("/api/billing/weekly"),
+        getJSON("/api/billing/errors"),
+        getJSON("/api/billing/daily-rate"),
+        getJSON("/api/billing/ar"),
+        userRole === "admin" ? getJSON("/api/billing/early-departures") : Promise.resolve([]),
+      ]);
+
+      setSummary(sum);
+      setCenters(asArr(cen));
+      setWeekly(asArr(wk));
+      setErrors(asArr(errs));
+      setDailyRate(dr && Array.isArray(dr.weeks) ? dr : null);
+      setArBuckets(asArr(arb));
+      setED(asArr(ed));
+
+      // Only a hard error if nothing core loaded (most likely: not signed in).
+      if (sum == null && !asArr(cen).length && !asArr(wk).length) {
+        setError("Could not load billing data. Make sure you're signed in, then refresh.");
       }
-      const results = await Promise.all(corePromises);
-      const [s, c, w, e, ed] = results;
-      setSummary(s);
-      setCenters(c);
-      setWeekly(w);
-      setErrors(e);
-      setED(Array.isArray(ed) ? ed : []);
     } catch (err) {
       console.error("Billing API fetch failed:", err);
       setError("Could not reach billing API.");
@@ -223,7 +240,7 @@ export default function BillingDashboard({ userRole = "manager" }) {
     <div style={{ padding: 32, textAlign: "center", color: "#ef4444" }}>
       <div style={{ fontSize: 20, marginBottom: 8 }}>⚠️ {error}</div>
       <div style={{ fontSize: 13, color: "#9ca3af" }}>
-        Start the backend: <code>uvicorn backend.main:app --reload</code> from the Dev folder.
+        If you’re signed in and this persists, try a hard refresh (Ctrl+Shift+R).
       </div>
     </div>
   );
@@ -265,6 +282,12 @@ export default function BillingDashboard({ userRole = "manager" }) {
         <KPICard label="Attendance Days"  value={fmtNum(summary?.attendance_days)}
           sub={`${fmtNum(summary?.unique_clients)} unique clients`}
           accent="#10b981" />
+        <KPICard label="Daily Rate (YTD)" value={dailyRate?.ytd ? fmt$(dailyRate.ytd.daily_rate) : "—"}
+          sub={dailyRate?.ytd ? `${fmtNum(dailyRate.ytd.attendance)} attendance days` : "rev / person / day"}
+          accent="#0ea5e9" />
+        <KPICard label="Outstanding AR"   value={fmt$(arBuckets.reduce((s, b) => s + Number(b.unpaid || 0), 0))}
+          sub={`${fmt$(arBuckets.reduce((s, b) => s + Number(b.paid || 0), 0))} paid to date`}
+          accent="#ef4444" />
         <KPICard label="Missed Revenue"   value={fmt$(summary?.total_missed_revenue)}
           sub="Unbilled 15-min units"
           sparkData={missedSparkline} sparkColor="#f87171" accent="#f87171" />
@@ -281,8 +304,10 @@ export default function BillingDashboard({ userRole = "manager" }) {
       {/* ── Tabs ── */}
       <div style={{ display: "flex", gap: 2, marginBottom: 20, borderBottom: "2px solid #e5e7eb" }}>
         {[
-          ["overview", "By Center"],
-          ["weekly",   "Weekly Trend"],
+          ["overview",   "By Center"],
+          ["daily-rate", "Daily Rate"],
+          ["ar",         "AR"],
+          ["weekly",     "Weekly Trend"],
           ...(userRole === "admin" ? [["errors", "Errors"], ["early-departures", "Early Departures"]] : []),
         ].map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)} style={{
@@ -334,6 +359,94 @@ export default function BillingDashboard({ userRole = "manager" }) {
                 </tr>
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Daily Rate tab ── */}
+      {tab === "daily-rate" && (
+        <div style={cardStyle}>
+          <div style={cardHeadStyle}>Daily Rate — revenue per person per day (Mon–Sun weeks · excludes OSL &amp; orphan trips)</div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "#f9fafb", borderBottom: "2px solid #e5e7eb" }}>
+                  {["Week of", "Billed", "Attendance", "Daily Rate", "Paid", "Unpaid"].map(h => (
+                    <th key={h} style={thStyle}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(dailyRate?.weeks ? [...dailyRate.weeks].reverse() : []).map((w, i) => (
+                  <tr key={i} style={{ borderBottom: "1px solid #f3f4f6" }}
+                    onMouseEnter={e => e.currentTarget.style.background = "#f9fafb"}
+                    onMouseLeave={e => e.currentTarget.style.background = ""}>
+                    <td style={{ ...tdStyle, fontWeight: 500 }}>{weekLabel(w.week_start)}</td>
+                    <td style={tdStyle}>{fmt$(w.billed)}</td>
+                    <td style={tdStyle}>{fmtNum(w.attendance)}</td>
+                    <td style={{ ...tdStyle, fontWeight: 600, color: "#0ea5e9" }}>{fmt$(w.daily_rate)}</td>
+                    <td style={tdStyle}>{fmt$(w.paid)}</td>
+                    <td style={{ ...tdStyle, color: Number(w.unpaid) > 0 ? "#ef4444" : "#111827" }}>{fmt$(w.unpaid)}</td>
+                  </tr>
+                ))}
+                {dailyRate?.ytd && (
+                  <tr style={{ borderTop: "2px solid #e5e7eb", fontWeight: 700, background: "#f9fafb" }}>
+                    <td style={tdStyle}>YTD</td>
+                    <td style={tdStyle}>{fmt$(dailyRate.ytd.billed)}</td>
+                    <td style={tdStyle}>{fmtNum(dailyRate.ytd.attendance)}</td>
+                    <td style={{ ...tdStyle, color: "#0ea5e9" }}>{fmt$(dailyRate.ytd.daily_rate)}</td>
+                    <td style={tdStyle}>{fmt$(dailyRate.ytd.paid)}</td>
+                    <td style={{ ...tdStyle, color: "#ef4444" }}>{fmt$(dailyRate.ytd.unpaid)}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── AR tab ── */}
+      {tab === "ar" && (
+        <div style={cardStyle}>
+          <div style={cardHeadStyle}>Accounts Receivable by bucket</div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+              <thead>
+                <tr style={{ background: "#f9fafb", borderBottom: "2px solid #e5e7eb" }}>
+                  {["Bucket", "Billed", "Paid", "Unpaid (AR)", "% Collected"].map(h => (
+                    <th key={h} style={thStyle}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {arBuckets.map((b, i) => {
+                  const billed = Number(b.billed || 0), paid = Number(b.paid || 0);
+                  const pct = billed ? Math.round((paid / billed) * 100) : 0;
+                  return (
+                    <tr key={i} style={{ borderBottom: "1px solid #f3f4f6" }}
+                      onMouseEnter={e => e.currentTarget.style.background = "#f9fafb"}
+                      onMouseLeave={e => e.currentTarget.style.background = ""}>
+                      <td style={{ ...tdStyle, fontWeight: 600, color: "#111827" }}>{b.ar_bucket}</td>
+                      <td style={tdStyle}>{fmt$(b.billed)}</td>
+                      <td style={tdStyle}>{fmt$(b.paid)}</td>
+                      <td style={{ ...tdStyle, color: "#ef4444", fontWeight: 600 }}>{fmt$(b.unpaid)}</td>
+                      <td style={tdStyle}>{pct}%</td>
+                    </tr>
+                  );
+                })}
+                <tr style={{ borderTop: "2px solid #e5e7eb", fontWeight: 700, background: "#f9fafb" }}>
+                  <td style={tdStyle}>Total</td>
+                  <td style={tdStyle}>{fmt$(arBuckets.reduce((s, b) => s + Number(b.billed || 0), 0))}</td>
+                  <td style={tdStyle}>{fmt$(arBuckets.reduce((s, b) => s + Number(b.paid || 0), 0))}</td>
+                  <td style={{ ...tdStyle, color: "#ef4444" }}>{fmt$(arBuckets.reduce((s, b) => s + Number(b.unpaid || 0), 0))}</td>
+                  <td style={tdStyle}>—</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: "10px 16px", fontSize: 12, color: "#6b7280", lineHeight: 1.5 }}>
+            <strong>Waiver</strong> = regular waiver we can correct in-system and resubmit (in our control).{" "}
+            <strong>External</strong> = waiting on the payer — a county check (Local) or private pay.
           </div>
         </div>
       )}
