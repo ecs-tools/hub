@@ -8,6 +8,7 @@ import UtilizationDashboard from "./components/UtilizationDashboard.jsx";
 import HomeDashboard from "./components/HomeDashboard.jsx";
 import BillingDashboard from "./components/BillingDashboard.jsx";
 import ProviderReportsDashboard from "./components/ProviderReportsDashboard.jsx";
+import InvoicesDashboard from "./components/InvoicesDashboard.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
 import UploadModal from "./components/UploadModal.jsx";
 import NoteModal from "./components/NoteModal.jsx";
@@ -19,6 +20,7 @@ const MODULES = [
   { id: "tracker",     name: "Billing Error Detection", category: "Billing", description: "Log and track weekly billing errors across transportation and attendance.", available: true },
   { id: "billing",     name: "Billing Overview",        category: "Billing", description: "Weekly, monthly, and total billing metrics.", available: true },
   { id: "provider-reports", name: "Provider Reports",   category: "Billing", description: "DODD Medicaid billing reports (errors, claims, invoices, denied) by billing cycle.", available: true },
+  { id: "invoices",    name: "Invoice Manager",         category: "Billing", description: "Every generated invoice with live open balance, aging buckets, and one-click payment tracking.", available: true },
   { id: "calculator",  name: "Saturday Calculator",     category: "Tools",   description: "Estimate staffing costs and profitability for Saturday programming.", available: false },
   { id: "fleet",       name: "Fleet Dashboard",         category: "Reports", description: "Monitor vehicle maintenance status and service history.", available: false },
   { id: "utilization", name: "Utilization Tracker",     category: "Reports", description: "Track PAWS funding utilization and alert when clients approach limits.", available: false },
@@ -54,8 +56,23 @@ const CATEGORY_COLORS = {
   "Invalid Time": { bg: "#faf5ff", text: "#4c1d95", border: "#ddd6fe" },
 };
 
+// Stable, content-based row key. Including the date means manager statuses
+// re-attach to the same errors across the day's repeated pipeline re-uploads,
+// yet reset on their own when a new week's dated errors arrive. The `#n`
+// suffix (assigned by assignRowKeys) disambiguates true duplicates.
 function makeKey(row, idx) {
-  return `${row.location}-${row.name}-${row.date}-${idx}`;
+  return row._key ?? `${row.location}|${row.name}|${row.date}|${row.reason}#${idx}`;
+}
+
+// Tag each row with a stable _key. Identical rows get an incrementing #n so
+// two genuine duplicates don't collapse onto one shared status.
+function assignRowKeys(rows) {
+  const seen = {};
+  return rows.map(row => {
+    const base = `${row.location}|${row.name}|${row.date}|${row.reason}`;
+    const n = (seen[base] = (seen[base] || 0) + 1);
+    return { ...row, _key: `${base}#${n}` };
+  });
 }
 
 function centerName(location) {
@@ -444,13 +461,13 @@ export default function App() {
           setFlags(f);
           if (data.updatedAt) setLastUpdated(data.updatedAt);
           if (Array.isArray(data.rows)) {
-            setRawData(data.rows.map(r => ({
+            setRawData(assignRowKeys(data.rows.map(r => ({
               name: r.name || "",
               location: r.location || "",
               date: r.date || "",
               reason: r.reason || "",
               category: r.category || "",
-            })));
+            }))));
           }
         }
       } catch { /* ignore */ }
@@ -647,7 +664,7 @@ export default function App() {
       setStatuses({});
       setNotes({});
       setFlags({});
-      setRawData(newData);
+      setRawData(assignRowKeys(newData));
       setSelectedCenter("All Centers");
       setSelectedCategory("All Types");
       setShowUpload(false);
@@ -1415,6 +1432,14 @@ export default function App() {
         <div className="page-anim">
           <ErrorBoundary moduleName="Provider Reports">
             <ProviderReportsDashboard onBack={() => setActiveTab("home")} userRole={userRole} />
+          </ErrorBoundary>
+        </div>
+      )}
+
+      {activeTab === "invoices" && !showUnderConstruction && (
+        <div className="page-anim">
+          <ErrorBoundary moduleName="Invoice Manager">
+            <InvoicesDashboard onBack={() => setActiveTab("home")} userRole={userRole} />
           </ErrorBoundary>
         </div>
       )}
