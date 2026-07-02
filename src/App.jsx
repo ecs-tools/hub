@@ -209,10 +209,20 @@ function AdminPanel({ apiBase, modules }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState({});
   const [toast, setToast] = useState(null);
+  const [search, setSearch] = useState("");
+  const [resetModal, setResetModal] = useState(null); // username being reset
+  const [resetPw, setResetPw] = useState("");
+  const [resetSaving, setResetSaving] = useState(false);
 
   const showToast = (msg, ok = true) => {
     setToast({ msg, ok });
     setTimeout(() => setToast(null), 2500);
+  };
+
+  // Surface the server's actual reason (e.g. "You cannot demote your own
+  // account") instead of a generic failure message.
+  const detailOf = async (res, fallback) => {
+    try { return (await res.json()).detail || fallback; } catch { return fallback; }
   };
 
   const fetchUsers = () => {
@@ -237,8 +247,20 @@ function AdminPanel({ apiBase, modules }) {
       setUsers(prev => prev.map(u => u.username === username
         ? { ...u, role: data.role, permissions: data.permissions } : u));
       showToast(`${username} is now ${role}`);
-    } else { showToast("Failed to update role", false); }
+    } else { showToast(await detailOf(res, "Failed to update role"), false); }
     setSaving(s => ({ ...s, [username]: false }));
+  };
+
+  const resetPassword = async () => {
+    setResetSaving(true);
+    const res = await fetch(`${apiBase}/admin/users/${resetModal}/password`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: resetPw }),
+    });
+    if (res.ok) { showToast(`Password reset for ${resetModal}`); setResetModal(null); setResetPw(""); }
+    else { showToast(await detailOf(res, "Failed to reset password"), false); }
+    setResetSaving(false);
   };
 
   const togglePermission = async (username, moduleId, current) => {
@@ -262,8 +284,16 @@ function AdminPanel({ apiBase, modules }) {
       method: "DELETE", credentials: "include",
     });
     if (res.ok) { setUsers(prev => prev.filter(u => u.username !== username)); showToast(`${username} deleted`); }
-    else { showToast("Failed to delete user", false); }
+    else { showToast(await detailOf(res, "Failed to delete user"), false); }
   };
+
+  const visibleUsers = users.filter(u => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return u.username.toLowerCase().includes(q)
+      || (u.center || "").toLowerCase().includes(q)
+      || u.role.toLowerCase().includes(q);
+  });
 
   const ROLE_COLORS = {
     admin:   { bg: "#fef3c7", text: "#92400e", border: "#fde68a" },
@@ -279,10 +309,42 @@ function AdminPanel({ apiBase, modules }) {
         </div>
       )}
 
-      <div style={{ marginBottom: 28 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, color: "var(--navy)", margin: "0 0 4px", letterSpacing: "-0.3px" }}>Admin Panel</h1>
-        <p style={{ fontSize: 13, color: "var(--text-2)", margin: 0 }}>Manage user accounts, roles, and module access. Changes save instantly.</p>
+      <div style={{ marginBottom: 28, display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: "var(--navy)", margin: "0 0 4px", letterSpacing: "-0.3px" }}>Admin Panel</h1>
+          <p style={{ fontSize: 13, color: "var(--text-2)", margin: 0 }}>Manage user accounts, roles, and module access. Changes save instantly.</p>
+        </div>
+        <input
+          type="text" placeholder="Search users…" value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ border: "1.5px solid var(--border)", borderRadius: 8, padding: "8px 14px", fontSize: 13, width: 220, outline: "none", fontFamily: "inherit", background: search ? "#eff6ff" : "white" }}
+        />
       </div>
+
+      {/* Reset-password modal */}
+      {resetModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setResetModal(null)}>
+          <div style={{ background: "white", borderRadius: 12, padding: "26px 28px", width: 360, boxShadow: "0 8px 30px rgba(0,0,0,0.2)" }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "var(--navy)", marginBottom: 2 }}>Reset password</div>
+            <div style={{ fontSize: 13, color: "var(--text-2)", marginBottom: 16 }}>Set a new password for <strong>{resetModal}</strong>. Share it with them privately — they can't recover the old one.</div>
+            <input
+              type="text" placeholder="New password (min 8 characters)" value={resetPw}
+              onChange={e => setResetPw(e.target.value)} autoFocus
+              style={{ width: "100%", boxSizing: "border-box", border: "1.5px solid var(--border)", borderRadius: 8, padding: "9px 12px", fontSize: 14, fontFamily: "inherit", marginBottom: 16 }}
+            />
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button onClick={() => { setResetModal(null); setResetPw(""); }}
+                style={{ background: "white", border: "1px solid var(--border)", borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", color: "var(--text-2)" }}>
+                Cancel
+              </button>
+              <button onClick={resetPassword} disabled={resetPw.length < 8 || resetSaving}
+                style={{ background: resetPw.length >= 8 ? "var(--navy)" : "#94a3b8", color: "white", border: "none", borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: resetPw.length >= 8 ? "pointer" : "default", fontFamily: "inherit" }}>
+                {resetSaving ? "Saving…" : "Reset password"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Stats row */}
       <div style={{ display: "flex", gap: 14, marginBottom: 28, flexWrap: "wrap" }}>
@@ -308,15 +370,17 @@ function AdminPanel({ apiBase, modules }) {
             <span>User</span><span>Role</span><span>Center</span><span>Module Access</span><span></span>
           </div>
 
-          {users.length === 0 && (
-            <div style={{ padding: 32, textAlign: "center", color: "var(--text-2)", fontSize: 13 }}>No users found.</div>
+          {visibleUsers.length === 0 && (
+            <div style={{ padding: 32, textAlign: "center", color: "var(--text-2)", fontSize: 13 }}>
+              {search ? `No users match "${search}".` : "No users found."}
+            </div>
           )}
 
-          {users.map((user, idx) => {
+          {visibleUsers.map((user, idx) => {
             const rc = ROLE_COLORS[user.role] || ROLE_COLORS.staff;
             const joinDate = user.created_at ? new Date(user.created_at).toLocaleDateString() : "—";
             return (
-              <div key={user.username} style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 0.9fr 1fr auto", gap: 12, padding: "14px 20px", borderBottom: idx < users.length - 1 ? "1px solid var(--border)" : "none", alignItems: "start" }}>
+              <div key={user.username} style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 0.9fr 1fr auto", gap: 12, padding: "14px 20px", borderBottom: idx < visibleUsers.length - 1 ? "1px solid var(--border)" : "none", alignItems: "start" }}>
 
                 {/* User info */}
                 <div>
@@ -366,8 +430,17 @@ function AdminPanel({ apiBase, modules }) {
                   })}
                 </div>
 
-                {/* Delete */}
-                <div style={{ paddingTop: 2 }}>
+                {/* Row actions */}
+                <div style={{ paddingTop: 2, display: "flex", flexDirection: "column", gap: 6 }}>
+                  <button
+                    onClick={() => { setResetModal(user.username); setResetPw(""); }}
+                    title="Set a new password for this user"
+                    style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, padding: "4px 8px", fontSize: 11, color: "var(--text-2)", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}
+                    onMouseOver={e => { e.currentTarget.style.background = "var(--bg-soft)"; }}
+                    onMouseOut={e => { e.currentTarget.style.background = "none"; }}
+                  >
+                    Reset password
+                  </button>
                   <button
                     onClick={() => deleteUser(user.username)}
                     title="Delete user"
@@ -1293,8 +1366,10 @@ export default function App() {
       )}
 
       {activeTab === "tracker" && !showUnderConstruction && <ErrorBoundary moduleName="Error Tracker"><div style={{ padding: "24px 32px" }}>
-        {/* View switcher: This Week / Backlog / Carryover (needs history data) */}
-        {history.length > 0 && (
+        {/* View switcher: This Week / Backlog / Carryover. Admin-only preview
+            for now (the history endpoint is also admin-gated server-side);
+            drop the role check here when managers should see it. */}
+        {userRole === "admin" && history.length > 0 && (
           <div style={{ display: "inline-flex", background: "#f1f5f9", borderRadius: 10, padding: 3, marginBottom: 18, border: "1.5px solid #e2e8f0" }}>
             {[
               { id: "week", label: "This Week", count: rawData.length },
