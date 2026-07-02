@@ -36,3 +36,6 @@ dist-ssr
 # Client data — contains real client names + billing (PII). Never commit.
 # The app reads billing from the API at runtime, not this file.
 public/billing_data.json
+
+# Local-only data that must never ship with the site (PII)
+_local/
