@@ -406,6 +406,9 @@ export default function App() {
   const [regLoading, setRegLoading] = useState(false);
 
   const [rawData, setRawData] = useState(DEFAULT_DATA);
+  const [history, setHistory] = useState([]);            // year backlog (staging.error_history)
+  const [trackerView, setTrackerView] = useState("week"); // week | backlog | carryover
+  const [selectedWeek, setSelectedWeek] = useState("All Weeks");
   const [selectedCenter, setSelectedCenter] = useState("All Centers");
   const [selectedCategory, setSelectedCategory] = useState("All Types");
   const [statuses, setStatuses] = useState({});
@@ -438,8 +441,23 @@ export default function App() {
   const fileRef = useRef(null);
   const [sheetDbBannerVisible, setSheetDbBannerVisible] = useState(false);
 
-  const locations = ["All Centers", ...Array.from(new Set(rawData.map(r => centerName(r.location)))).filter(Boolean).sort()];
-  const categories = ["All Types", ...Array.from(new Set(rawData.map(r => r.category))).filter(Boolean).sort()];
+  // ── Tracker datasets ─────────────────────────────────────────────────────────
+  // This Week = the live working set (replaced by each pipeline upload).
+  // Backlog   = every 2026 error ever uploaded (error_history; never deleted).
+  // Carryover = backlog rows that aged out of the live set (their week's
+  //             Mon-Wed pipeline runs are over) without a manager resolving
+  //             them — i.e. "still not fixed by Wednesday".
+  // Statuses are keyed by row content, so one status map serves all views.
+  const liveKeys = useMemo(() => new Set(rawData.map(r => r._key)), [rawData]);
+  const carryoverRows = useMemo(
+    () => history.filter(r => !liveKeys.has(r._key) && !["fixed", "disputed"].includes(statuses[r._key])),
+    [history, liveKeys, statuses]
+  );
+  const activeData = trackerView === "backlog" ? history : trackerView === "carryover" ? carryoverRows : rawData;
+
+  const locations = ["All Centers", ...Array.from(new Set(activeData.map(r => centerName(r.location)))).filter(Boolean).sort()];
+  const categories = ["All Types", ...Array.from(new Set(activeData.map(r => r.category))).filter(Boolean).sort()];
+  const weeks = ["All Weeks", ...Array.from(new Set(history.map(r => r.week))).filter(Boolean).sort().reverse()];
 
   // Load error rows + per-row states from the FastAPI backend (was SheetDB).
   // Requires a valid login cookie, so it runs once the user is authenticated.
@@ -471,6 +489,24 @@ export default function App() {
           }
         }
       } catch { /* ignore */ }
+
+      // Year backlog — served by /api/errors/history. Keys come from the
+      // server (same content-key scheme), so statuses join with no extra work.
+      // If the endpoint isn't deployed yet, the Backlog/Carryover views simply
+      // stay hidden.
+      try {
+        const hres = await fetch(`${API_BASE}/api/errors/history`, { credentials: "include" });
+        if (hres.ok) {
+          const hdata = await hres.json();
+          if (Array.isArray(hdata.rows)) {
+            setHistory(hdata.rows.map(r => ({
+              name: r.name || "", location: r.location || "", date: r.date || "",
+              reason: r.reason || "", category: r.category || "",
+              _key: r.row_key, week: r.week_label || "",
+            })));
+          }
+        }
+      } catch { /* history unavailable — weekly view still works */ }
 
       setLoaded(true);
     }
@@ -756,15 +792,14 @@ export default function App() {
   const effStatus = (key) => statuses[key] ?? "open";
   const effFlag = (key) => flags[key] ?? false;
 
-  const filtered = rawData.filter(row => {
+  const filtered = activeData.filter(row => {
     const locMatch = selectedCenter === "All Centers" || centerName(row.location) === selectedCenter;
     const catMatch = selectedCategory === "All Types" || row.category === selectedCategory;
-    return locMatch && catMatch;
+    const weekMatch = trackerView === "week" || selectedWeek === "All Weeks" || row.week === selectedWeek;
+    return locMatch && catMatch && weekMatch;
   }).sort((a, b) => {
-    const aKey = makeKey(a, rawData.indexOf(a));
-    const bKey = makeKey(b, rawData.indexOf(b));
-    const aResolved = effStatus(aKey) !== "open";
-    const bResolved = effStatus(bKey) !== "open";
+    const aResolved = effStatus(a._key) !== "open";
+    const bResolved = effStatus(b._key) !== "open";
     if (aResolved !== bResolved) return aResolved ? 1 : -1;
     if (!sortField) return 0;
     let aVal = a[sortField], bVal = b[sortField];
@@ -774,9 +809,9 @@ export default function App() {
 
   const stats = {
     total: filtered.length,
-    fixed: filtered.filter(r => effStatus(makeKey(r, rawData.indexOf(r))) === "fixed").length,
-    disputed: filtered.filter(r => effStatus(makeKey(r, rawData.indexOf(r))) === "disputed").length,
-    open: filtered.filter(r => effStatus(makeKey(r, rawData.indexOf(r))) === "open").length,
+    fixed: filtered.filter(r => effStatus(r._key) === "fixed").length,
+    disputed: filtered.filter(r => effStatus(r._key) === "disputed").length,
+    open: filtered.filter(r => effStatus(r._key) === "open").length,
   };
 
   const centerStats = useMemo(() => {
@@ -1258,8 +1293,46 @@ export default function App() {
       )}
 
       {activeTab === "tracker" && !showUnderConstruction && <ErrorBoundary moduleName="Error Tracker"><div style={{ padding: "24px 32px" }}>
-        {/* Center Progress Bar Row */}
-        {centerStats.length > 0 && (
+        {/* View switcher: This Week / Backlog / Carryover (needs history data) */}
+        {history.length > 0 && (
+          <div style={{ display: "inline-flex", background: "#f1f5f9", borderRadius: 10, padding: 3, marginBottom: 18, border: "1.5px solid #e2e8f0" }}>
+            {[
+              { id: "week", label: "This Week", count: rawData.length },
+              { id: "backlog", label: "Backlog 2026", count: history.length },
+              { id: "carryover", label: "Carryover", count: carryoverRows.length },
+            ].map(v => {
+              const active = trackerView === v.id;
+              const alert = v.id === "carryover" && v.count > 0;
+              return (
+                <button key={v.id} onClick={() => { setTrackerView(v.id); setSelectedWeek("All Weeks"); }}
+                  style={{ border: "none", cursor: "pointer", fontFamily: "inherit", borderRadius: 8,
+                    padding: "7px 16px", fontSize: 13, fontWeight: 600, transition: "all 0.15s",
+                    background: active ? "white" : "transparent",
+                    color: active ? "var(--navy, #1a2d4d)" : "#64748b",
+                    boxShadow: active ? "0 1px 3px rgba(0,0,0,0.12)" : "none" }}>
+                  {v.label}
+                  <span style={{ marginLeft: 7, fontSize: 11, fontWeight: 700, borderRadius: 20, padding: "1px 7px",
+                    background: alert ? "#fee2e2" : active ? "#eef2f7" : "#e2e8f0",
+                    color: alert ? "#b91c1c" : "#64748b" }}>
+                    {v.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Explainer line for the history views */}
+        {trackerView !== "week" && (
+          <div style={{ fontSize: 13, color: "#64748b", marginBottom: 16, lineHeight: 1.5 }}>
+            {trackerView === "backlog"
+              ? "Every error uploaded in 2026, across all weeks. Statuses are shared with the weekly view — fixing it here fixes it everywhere."
+              : "Errors whose week ended (the Mon–Wed pipeline runs finished) without being marked Fixed or Not an Error. This is the catch-up list."}
+          </div>
+        )}
+
+        {/* Center Progress Bar Row — weekly progress, so weekly view only */}
+        {trackerView === "week" && centerStats.length > 0 && (
           <div style={{ display: "flex", gap: 8, marginBottom: 20, overflowX: "auto", paddingBottom: 4 }}>
             {centerStats.map(({ center, total, resolved, pct, noErrors }) => {
               const color = progressColor(pct);
@@ -1284,6 +1357,15 @@ export default function App() {
 
         {/* Filters */}
         <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+          {trackerView !== "week" && (
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.5px" }}>Week</label>
+              <select value={selectedWeek} onChange={e => setSelectedWeek(e.target.value)}
+                style={{ border: "1.5px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", fontSize: 14, background: "white", color: "#1e293b", cursor: "pointer", minWidth: 140 }}>
+                {weeks.map(w => <option key={w}>{w}</option>)}
+              </select>
+            </div>
+          )}
           <div>
             <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.5px" }}>Center</label>
             <select value={selectedCenter} onChange={e => setSelectedCenter(e.target.value)}
@@ -1325,6 +1407,7 @@ export default function App() {
               <thead>
                 <tr style={{ background: "#f8fafc" }}>
                   {[
+                    ...(trackerView !== "week" ? [{ label: "Week", field: "week" }] : []),
                     { label: "Client Name", field: "name" },
                     { label: "Center", field: null },
                     { label: "Date", field: "date" },
@@ -1337,7 +1420,8 @@ export default function App() {
                       style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 700,
                         color: sortField === field ? "#3b82f6" : "#64748b", textTransform: "uppercase",
                         letterSpacing: "0.5px", borderBottom: "1.5px solid #e2e8f0", whiteSpace: "nowrap",
-                        cursor: field ? "pointer" : "default", userSelect: "none" }}>
+                        cursor: field ? "pointer" : "default", userSelect: "none",
+                        position: "sticky", top: 0, background: "#f8fafc", zIndex: 1 }}>
                       {label}
                       {field && <span style={{ marginLeft: 5, fontSize: 10, opacity: sortField === field ? 1 : 0.35 }}>
                         {sortField === field ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}
@@ -1348,7 +1432,7 @@ export default function App() {
               </thead>
               <tbody>
                 {filtered.map((row, i) => {
-                  const key = makeKey(row, rawData.indexOf(row));
+                  const key = row._key ?? makeKey(row, i);
                   const status = effStatus(key);
                   const note = notes[key] ?? "";
                   const flagged = effFlag(key);
@@ -1357,6 +1441,9 @@ export default function App() {
                   return (
                     <tr key={key + i} className="error-row" style={{ borderBottom: "1px solid #f1f5f9", background: rowBg,
                       transition: "background 0.1s" }}>
+                      {trackerView !== "week" && (
+                        <td style={{ padding: "10px 16px", color: "#64748b", fontFamily: "'DM Mono', monospace", fontSize: 12, whiteSpace: "nowrap" }}>{row.week}</td>
+                      )}
                       <td style={{ padding: "10px 16px", fontWeight: 500, color: "#1e293b", whiteSpace: "nowrap" }}>{row.name}</td>
                       <td style={{ padding: "10px 16px", color: "#475569", whiteSpace: "nowrap" }}>{centerName(row.location)}</td>
                       <td style={{ padding: "10px 16px", color: "#475569", fontFamily: "'DM Mono', monospace", fontSize: 12, whiteSpace: "nowrap" }}>{formatDate(row.date)}</td>
@@ -1401,8 +1488,10 @@ export default function App() {
                   );
                 })}
                 {filtered.length === 0 && (
-                  <tr><td colSpan={7} style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>
-                    No errors found for this selection.
+                  <tr><td colSpan={trackerView === "week" ? 7 : 8} style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>
+                    {trackerView === "carryover" && selectedWeek === "All Weeks" && selectedCenter === "All Centers" && selectedCategory === "All Types"
+                      ? "Nothing carried over — every closed week's errors were resolved. 🎉"
+                      : "No errors found for this selection."}
                   </td></tr>
                 )}
               </tbody>
