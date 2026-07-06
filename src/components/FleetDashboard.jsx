@@ -272,22 +272,275 @@ function InsightsPanel({ vehicles, eventsMap, allEvents }) {
   );
 }
 
-export default function FleetDashboard() {
+// ── Ticket system (Cognito Forms → staging.fleet_tickets sync) ────────────────
+// Tickets are submitted + status-managed in Cognito Forms; the backend mirrors
+// them every 30 min. repair_cost is OURS — edited right here, manager/admin only.
+const TICKETS_URL = `${API_BASE}/api/fleet/tickets`;
+const ROLLUP_URL  = `${API_BASE}/api/fleet/tickets/rollup`;
+
+const STATUS_STYLE = {
+  "Submitted":   { bg: "#dbeafe", color: "#1e40af", border: "#bfdbfe" },
+  "In Progress": { bg: "#fef9c3", color: "#854d0e", border: "#fde68a" },
+  "Completed":   { bg: "#dcfce7", color: "#166534", border: "#bbf7d0" },
+};
+const URGENCY_STYLE = {
+  Urgent: { bg: "#fee2e2", color: "#b91c1c", border: "#fca5a5" },
+  Medium: { bg: "#fef9c3", color: "#854d0e", border: "#fde68a" },
+  Low:    { bg: "#f1f5f9", color: "#475569", border: "#e2e8f0" },
+};
+
+const chip = (style) => ({ display: "inline-block", padding: "2px 9px", borderRadius: 20, fontSize: 11.5, fontWeight: 600, background: style?.bg || "#f1f5f9", color: style?.color || "#475569", border: `1px solid ${style?.border || "#e2e8f0"}`, whiteSpace: "nowrap" });
+
+function fmtDay(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? "—" : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function fmtMoney(n) {
+  if (n === null || n === undefined || n === "") return null;
+  const v = Number(n);
+  return isNaN(v) ? null : v.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+// Inline repair-cost editor. The PATCH stamps who set it and when; an empty
+// value clears the cost.
+function CostCell({ ticket, canEdit, onSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(false);
+
+  const save = async () => {
+    const cost = value.trim() === "" ? null : parseFloat(value.replace(/[$,\s]/g, ""));
+    if (cost !== null && (isNaN(cost) || cost < 0)) { setErr(true); return; }
+    setSaving(true);
+    setErr(false);
+    try {
+      const res = await fetch(`${TICKETS_URL}/${ticket.entry_number}`, {
+        method: "PATCH", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repair_cost: cost }),
+      });
+      if (!res.ok) throw new Error(res.status);
+      onSaved(ticket.entry_number, await res.json());
+      setEditing(false);
+    } catch { setErr(true); }
+    setSaving(false);
+  };
+
+  if (!editing) {
+    const money = fmtMoney(ticket.repair_cost);
+    return (
+      <button
+        disabled={!canEdit}
+        onClick={() => { setValue(ticket.repair_cost ?? ""); setEditing(true); setErr(false); }}
+        title={canEdit ? (ticket.cost_updated_by ? `Set by ${ticket.cost_updated_by}` : "Add repair cost") : "Managers and admins can edit cost"}
+        style={{ background: money ? "#f0fdf4" : "#f8fafc", color: money ? "#166534" : "#94a3b8", border: `1px solid ${money ? "#bbf7d0" : "#e2e8f0"}`, borderRadius: 6, padding: "3px 10px", fontSize: 12, fontWeight: money ? 600 : 400, cursor: canEdit ? "pointer" : "default", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+        {money || (canEdit ? "+ Add cost" : "—")}
+      </button>
+    );
+  }
+  return (
+    <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+      <input autoFocus value={value} onChange={e => setValue(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
+        placeholder="0.00"
+        style={{ width: 80, border: `1.5px solid ${err ? "#fca5a5" : "#93c5fd"}`, borderRadius: 6, padding: "3px 8px", fontSize: 12, fontFamily: "inherit", outline: "none" }} />
+      <button onClick={save} disabled={saving} style={{ border: "none", background: "#1a2d4d", color: "#fff", borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{saving ? "…" : "Save"}</button>
+      <button onClick={() => setEditing(false)} style={{ border: "1px solid #e2e8f0", background: "#fff", color: "#64748b", borderRadius: 6, padding: "3px 7px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>✕</button>
+    </span>
+  );
+}
+
+function TicketsView({ tickets, userRole, search, setSearch, onCostSaved }) {
+  const [statusFilter, setStatusFilter] = useState("Open");
+  const [urgencyFilter, setUrgencyFilter] = useState("All");
+  const [centerFilter, setCenterFilter] = useState("All Centers");
+  const canEdit = userRole === "admin" || userRole === "manager";
+
+  const centers = useMemo(
+    () => ["All Centers", ...Array.from(new Set(tickets.map(t => t.center).filter(Boolean))).sort()],
+    [tickets]
+  );
+
+  const openTickets = tickets.filter(t => t.status !== "Completed");
+  const totalCost = tickets.reduce((s, t) => s + (Number(t.repair_cost) || 0), 0);
+  const newLast30 = useMemo(() => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 30);
+    return tickets.filter(t => new Date(t.date_submitted) >= cutoff).length;
+  }, [tickets]);
+
+  const filtered = tickets.filter(t => {
+    const statusMatch = statusFilter === "All" ? true
+      : statusFilter === "Open" ? t.status !== "Completed"
+      : t.status === statusFilter;
+    if (!statusMatch) return false;
+    if (urgencyFilter !== "All" && t.urgency !== urgencyFilter) return false;
+    if (centerFilter !== "All Centers" && t.center !== centerFilter) return false;
+    const q = search.trim().toLowerCase();
+    if (q) {
+      const hay = `${t.vin_last5} ${t.requester} ${t.issue_description} ${t.maintenance_type} ${t.maintenance_other || ""} ${t.center}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const sel = { border: "1.5px solid #e2e8f0", borderRadius: 8, padding: "7px 10px", fontSize: 13, background: "white", color: "#1e293b", cursor: "pointer", fontFamily: "inherit" };
+
+  return (
+    <>
+      <div style={{ ...S.row, gridTemplateColumns: "repeat(4, 1fr)" }}>
+        <KpiCard title="Open Tickets" value={openTickets.length} sub={`${tickets.length} all time`} accent={openTickets.length > 10 ? "#dc2626" : "#1a2d4d"} />
+        <KpiCard title="Urgent Open" value={openTickets.filter(t => t.urgency === "Urgent").length} sub="Needs attention now" accent={openTickets.some(t => t.urgency === "Urgent") ? "#dc2626" : "#166534"} />
+        <KpiCard title="New (30 days)" value={newLast30} sub="Tickets submitted" />
+        <KpiCard title="Repair Cost Logged" value={`$${totalCost.toLocaleString("en-US", { maximumFractionDigits: 0 })}`} sub="Across all tickets" />
+      </div>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={sel}>
+          {["Open", "All", "Submitted", "In Progress", "Completed"].map(s => <option key={s}>{s}</option>)}
+        </select>
+        <select value={urgencyFilter} onChange={e => setUrgencyFilter(e.target.value)} style={sel}>
+          {["All", "Urgent", "Medium", "Low"].map(s => <option key={s}>{s}</option>)}
+        </select>
+        <select value={centerFilter} onChange={e => setCenterFilter(e.target.value)} style={sel}>
+          {centers.map(c => <option key={c}>{c}</option>)}
+        </select>
+        <input
+          type="text" placeholder="Search VIN, issue, requester…" value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ border: "1.5px solid #e2e8f0", borderRadius: 8, padding: "7px 12px", fontSize: 13, width: 230, outline: "none", fontFamily: "inherit", background: search ? "#eff6ff" : "white" }}
+        />
+        <span style={{ fontSize: 12, color: "#64748b", marginLeft: "auto" }}>{filtered.length} of {tickets.length} tickets</span>
+      </div>
+
+      <div style={{ ...S.card, padding: 0, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead><tr>{["#", "Submitted", "Status", "Urgency", "Center", "VIN", "Type", "Issue", "Requester", "Repair Cost", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {filtered.map(t => (
+              <tr key={t.entry_number} style={{ background: t.status !== "Completed" && t.urgency === "Urgent" ? "#fff5f5" : "white" }}>
+                <td style={{ ...S.td, color: "#94a3b8", fontSize: 12 }}>{t.entry_number}</td>
+                <td style={{ ...S.td, whiteSpace: "nowrap" }}>{fmtDay(t.date_submitted)}</td>
+                <td style={S.td}><span style={chip(STATUS_STYLE[t.status])}>{t.status || "—"}</span></td>
+                <td style={S.td}><span style={chip(URGENCY_STYLE[t.urgency])}>{t.urgency || "—"}</span></td>
+                <td style={{ ...S.td, whiteSpace: "nowrap" }}>{t.center}</td>
+                <td style={{ ...S.td, fontFamily: "'DM Mono', monospace", fontSize: 12 }}>{t.vin_last5 || <span style={{ color: "#cbd5e1" }}>none</span>}</td>
+                <td style={{ ...S.td, whiteSpace: "nowrap" }}>{t.maintenance_type}{t.maintenance_other ? ` — ${t.maintenance_other}` : ""}</td>
+                <td style={{ ...S.td, maxWidth: 320 }} title={t.issue_description}>
+                  <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.issue_description}</div>
+                </td>
+                <td style={{ ...S.td, whiteSpace: "nowrap" }}>{t.requester}</td>
+                <td style={S.td}><CostCell ticket={t} canEdit={canEdit} onSaved={onCostSaved} /></td>
+                <td style={S.td}>
+                  {t.admin_link && (
+                    <a href={t.admin_link} target="_blank" rel="noopener noreferrer"
+                      title="Open in Cognito Forms (status is edited there)"
+                      style={{ fontSize: 12, color: "#4a7ab5", textDecoration: "none", whiteSpace: "nowrap" }}>
+                      Edit ↗
+                    </a>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {filtered.length === 0 && (
+              <tr><td colSpan={11} style={{ ...S.td, textAlign: "center", color: "#94a3b8", padding: 32 }}>
+                {tickets.length === 0 ? "No tickets synced yet — the sync runs every 30 minutes." : "No tickets match these filters."}
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function HealthView({ rollup, vehicleLookup, onSelectVin }) {
+  // A vehicle is "recurring" on a type with 2+ tickets in the last 6 months.
+  const rows = rollup.map(v => ({
+    ...v,
+    recurring: Object.entries(v.types || {})
+      .filter(([, c]) => c.last_6mo >= 2)
+      .sort((a, b) => b[1].last_6mo - a[1].last_6mo),
+  }));
+  return (
+    <div style={{ ...S.card, padding: 0, overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead><tr>{["VIN", "Vehicle", "Open", "Tickets (6 mo)", "All Time", "Cost to Date", "Cost (90 d)", "Last Ticket", "Recurring Issues"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+        <tbody>
+          {rows.map(v => {
+            const veh = vehicleLookup[v.vin];
+            return (
+              <tr key={v.vin} onClick={() => onSelectVin(v.vin)} title="Show this vehicle's tickets"
+                style={{ cursor: "pointer", background: v.open_tickets > 0 ? "#fffbeb" : "white" }}>
+                <td style={{ ...S.td, fontFamily: "'DM Mono', monospace", fontWeight: 600 }}>{v.vin}</td>
+                <td style={{ ...S.td, whiteSpace: "nowrap", color: veh ? "#1e293b" : "#cbd5e1" }}>{veh ? `${veh.year} ${veh.make} ${veh.model}` : "—"}</td>
+                <td style={{ ...S.td, fontWeight: 700, color: v.open_tickets > 0 ? "#b45309" : "#94a3b8" }}>{v.open_tickets}</td>
+                <td style={S.td}>{v.tickets_6mo}</td>
+                <td style={S.td}>{v.total_tickets}</td>
+                <td style={{ ...S.td, fontWeight: 600 }}>{fmtMoney(v.total_cost) || "$0.00"}</td>
+                <td style={S.td}>{fmtMoney(v.cost_90d) || "—"}</td>
+                <td style={{ ...S.td, whiteSpace: "nowrap" }}>{fmtDay(v.last_ticket)}</td>
+                <td style={S.td}>
+                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                    {v.recurring.map(([type, c]) => (
+                      <span key={type} style={chip(c.last_6mo >= 3 ? URGENCY_STYLE.Urgent : { bg: "#fff7ed", color: "#9a3412", border: "#fed7aa" })}>
+                        {c.last_6mo}× {type} / 6 mo
+                      </span>
+                    ))}
+                    {v.recurring.length === 0 && <span style={{ color: "#cbd5e1", fontSize: 12 }}>—</span>}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+          {rows.length === 0 && (
+            <tr><td colSpan={9} style={{ ...S.td, textAlign: "center", color: "#94a3b8", padding: 32 }}>No vehicle data yet.</td></tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export default function FleetDashboard({ userRole }) {
   const [vehicles, setVehicles] = useState([]);
   const [rawEvents, setRawEvents] = useState([]);
+  const [tickets, setTickets] = useState([]);
+  const [rollup, setRollup] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [vinFilter, setVinFilter] = useState("");
+  const [tab, setTab] = useState("tickets"); // tickets | health | legacy service log
+  const [search, setSearch] = useState("");   // tickets-tab search
+  const [vinFilter, setVinFilter] = useState(""); // legacy-tab filter
 
   useEffect(() => {
     async function load() {
       try {
-        const [vRes, mRes] = await Promise.all([fetch(VEHICLE_LIST_URL, { credentials: "include" }), fetch(MAINTENANCE_URL, { credentials: "include" })]);
-        if (!vRes.ok) throw new Error(`Vehicle list: ${vRes.status}`);
-        if (!mRes.ok) throw new Error(`Maintenance: ${mRes.status}`);
-        const [vData, mData] = await Promise.all([vRes.json(), mRes.json()]);
-        setVehicles(vData.map(row => ({ dcCard: row["DC-Card #"] || row["DC-Card#"] || "", year: row["Year"] || "", make: row["Make"] || "", model: row["Model"] || "", name: row["Name 2"] || "", vin: row["VIN"] || "", type: row["Type"] || "" })));
-        setRawEvents(mData.map(row => ({ last5vin: (row["Last 5 of VIN #"] || "").trim().toUpperCase(), fullVin: (row["VIN# (Place Holder)"] || "").trim().toUpperCase(), date: parseDate(row["Date of Expense"]), odometer: parseFloat(String(row["Odometer at Service"] || "").replace(/,/g, "")) || null, location: row["Location of Service"] || "", cost: parseCost(row["Cost Amount"]), maintenanceType: row["Maintenance Type"] || "", notes: row["Notes"] || "" })));
+        const [tRes, rRes, vRes, mRes] = await Promise.all([
+          fetch(TICKETS_URL, { credentials: "include" }),
+          fetch(ROLLUP_URL, { credentials: "include" }),
+          fetch(VEHICLE_LIST_URL, { credentials: "include" }),
+          fetch(MAINTENANCE_URL, { credentials: "include" }),
+        ]);
+        if (!tRes.ok) throw new Error(`Tickets: ${tRes.status}`);
+        const tData = await tRes.json();
+        setTickets(Array.isArray(tData) ? tData : []);
+        if (rRes.ok) {
+          const rData = await rRes.json();
+          setRollup(Array.isArray(rData) ? rData : []);
+        }
+        // Legacy service-log sources (tables may be empty) — never fatal.
+        if (vRes.ok) {
+          const vData = await vRes.json();
+          setVehicles(vData.map(row => ({ dcCard: row["DC-Card #"] || row["DC-Card#"] || "", year: row["Year"] || "", make: row["Make"] || "", model: row["Model"] || "", name: row["Name 2"] || "", vin: row["VIN"] || "", type: row["Type"] || "" })));
+        }
+        if (mRes.ok) {
+          const mData = await mRes.json();
+          setRawEvents(mData.map(row => ({ last5vin: (row["Last 5 of VIN #"] || "").trim().toUpperCase(), fullVin: (row["VIN# (Place Holder)"] || "").trim().toUpperCase(), date: parseDate(row["Date of Expense"]), odometer: parseFloat(String(row["Odometer at Service"] || "").replace(/,/g, "")) || null, location: row["Location of Service"] || "", cost: parseCost(row["Cost Amount"]), maintenanceType: row["Maintenance Type"] || "", notes: row["Notes"] || "" })));
+        }
       } catch (err) {
         console.error("Fleet load error:", err);
         setError(err.message);
@@ -297,6 +550,23 @@ export default function FleetDashboard() {
     }
     load();
   }, []);
+
+  // After a cost save: patch the ticket in place, refresh the rollup quietly.
+  const onCostSaved = (entryNumber, data) => {
+    setTickets(prev => prev.map(t => (t.entry_number === entryNumber ? { ...t, ...data } : t)));
+    fetch(ROLLUP_URL, { credentials: "include" })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (Array.isArray(d)) setRollup(d); })
+      .catch(() => {});
+  };
+
+  // year/make/model lookup for the health view, keyed by VIN last-5.
+  // Empty until staging.fleet_vehicles gets loaded — the view degrades to VIN only.
+  const vehicleLookup = useMemo(() => {
+    const map = {};
+    vehicles.forEach(v => { const k = last5(v.vin); if (k) map[k] = v; });
+    return map;
+  }, [vehicles]);
 
   const eventsMap = useMemo(() => { const map = {}; rawEvents.forEach(e => { const key = e.last5vin || last5(e.fullVin); if (!key) return; if (!map[key]) map[key] = []; map[key].push(e); }); return map; }, [rawEvents]);
 
@@ -320,53 +590,91 @@ export default function FleetDashboard() {
 
   const isFiltered = vinFilter.trim().length > 0;
 
+  const tabBtn = (id, label) => (
+    <button key={id} onClick={() => setTab(id)}
+      style={{ border: "none", cursor: "pointer", fontFamily: "inherit", borderRadius: 8,
+        padding: "7px 16px", fontSize: 13, fontWeight: 600, transition: "all 0.15s",
+        background: tab === id ? "white" : "transparent",
+        color: tab === id ? "#1a2d4d" : "#64748b",
+        boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,0.12)" : "none" }}>
+      {label}
+    </button>
+  );
+
   return (
     <div style={S.body}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 10 }}>
-        <div style={{ fontSize: 11, color: "#64748b" }}>
-          {isFiltered ? `${filteredVehicles.length} of ${vehicles.length} vehicles` : `${vehicles.length} vehicles`} · {rawEvents.length} maintenance events
-        </div>
-        <div style={{ position: "relative" }}>
-          <input
-            type="text"
-            placeholder="Filter by VIN..."
-            value={vinFilter}
-            onChange={e => setVinFilter(e.target.value)}
-            style={{ border: "1.5px solid #e2e8f0", borderRadius: 8, padding: "7px 32px 7px 12px", fontSize: 13, width: 200, outline: "none", fontFamily: "inherit", background: isFiltered ? "#eff6ff" : "white", borderColor: isFiltered ? "#3b82f6" : "#e2e8f0" }}
-          />
-          {isFiltered && (
-            <button onClick={() => setVinFilter("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#94a3b8", padding: 0, lineHeight: 1 }}>✕</button>
-          )}
-        </div>
+      {/* Tab switcher: live ticket queue / vehicle rollup / legacy Excel-era view */}
+      <div style={{ display: "inline-flex", background: "#f1f5f9", borderRadius: 10, padding: 3, marginBottom: 18, border: "1.5px solid #e2e8f0" }}>
+        {tabBtn("tickets", `Tickets (${tickets.filter(t => t.status !== "Completed").length} open)`)}
+        {tabBtn("health", "Vehicle Health")}
+        {tabBtn("legacy", "Service Log")}
       </div>
 
-      {/* Row 1 — KPIs */}
-      <div style={{ ...S.row, gridTemplateColumns: "repeat(4, 1fr)" }}>
-        <KpiCard title="Total Maintenance Spend" value={`$${totalSpend.toLocaleString("en-US", { maximumFractionDigits: 0 })}`} sub="All time" />
-        <KpiCard title="Vehicles Tracked" value={isFiltered ? filteredVehicles.length : vehicles.length} sub={isFiltered ? `filtered from ${vehicles.length} total` : `${rawEvents.length} events logged`} />
-        <KpiCard title="Corrective Rate" value={`${correctivePct}%`} sub="Target: <40%" accent={correctivePct > 40 ? "#dc2626" : "#166534"} />
-        <KpiCard title="Avg Cost / Event" value={`$${avgCost.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub="Per maintenance event" />
-      </div>
+      {tab === "tickets" && (
+        <TicketsView tickets={tickets} userRole={userRole} search={search} setSearch={setSearch} onCostSaved={onCostSaved} />
+      )}
 
-      {/* Row 2 — Health + Alerts */}
-      <div style={{ ...S.row, gridTemplateColumns: "1fr 2fr" }}>
-        <div style={S.card}><div style={S.cardTitle}>Fleet Health{isFiltered && <span style={{ fontSize: 11, fontWeight: 400, color: "#3b82f6", marginLeft: 6 }}>(filtered)</span>}</div><StoplightGrid vehicles={filteredVehicles} eventsMap={eventsMap} /></div>
-        <div style={S.card}><div style={S.cardTitle}>Priority Alerts{isFiltered && <span style={{ fontSize: 11, fontWeight: 400, color: "#3b82f6", marginLeft: 6 }}>(filtered)</span>}</div><AlertList vehicles={filteredVehicles} eventsMap={eventsMap} /></div>
-      </div>
+      {tab === "health" && (
+        <>
+          <div style={{ fontSize: 13, color: "#64748b", marginBottom: 14, lineHeight: 1.5 }}>
+            One row per vehicle (VIN last-5), worst first. Click a row to see its tickets.
+            Recurring-issue chips flag 2+ tickets of the same type within 6 months — those are the
+            "get ahead of it" vehicles.
+          </div>
+          <HealthView rollup={rollup} vehicleLookup={vehicleLookup}
+            onSelectVin={(vin) => { setSearch(vin === "(no VIN)" ? "" : vin); setTab("tickets"); }} />
+        </>
+      )}
 
-      {/* Row 3 — Cost Table + Charts */}
-      <div style={{ ...S.row, gridTemplateColumns: "2fr 1fr" }}>
-        <div style={S.card}><div style={S.cardTitle}>Top Costliest Vehicles</div><CostTable vehicles={filteredVehicles} eventsMap={eventsMap} /></div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          <div style={S.card}><div style={S.cardTitle}>Corrective vs Preventive</div><CorrectivePieChart allEvents={rawEvents} /></div>
-          <div style={S.card}><div style={S.cardTitle}>Top Service Locations</div><VendorBreakdown allEvents={rawEvents} /></div>
-        </div>
-      </div>
+      {tab === "legacy" && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 10 }}>
+            <div style={{ fontSize: 11, color: "#64748b" }}>
+              {isFiltered ? `${filteredVehicles.length} of ${vehicles.length} vehicles` : `${vehicles.length} vehicles`} · {rawEvents.length} maintenance events
+            </div>
+            <div style={{ position: "relative" }}>
+              <input
+                type="text"
+                placeholder="Filter by VIN..."
+                value={vinFilter}
+                onChange={e => setVinFilter(e.target.value)}
+                style={{ border: "1.5px solid #e2e8f0", borderRadius: 8, padding: "7px 32px 7px 12px", fontSize: 13, width: 200, outline: "none", fontFamily: "inherit", background: isFiltered ? "#eff6ff" : "white", borderColor: isFiltered ? "#3b82f6" : "#e2e8f0" }}
+              />
+              {isFiltered && (
+                <button onClick={() => setVinFilter("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#94a3b8", padding: 0, lineHeight: 1 }}>✕</button>
+              )}
+            </div>
+          </div>
 
-      {/* Row 4 — Insights */}
-      <div style={{ ...S.row, gridTemplateColumns: "1fr" }}>
-        <div style={S.card}><div style={S.cardTitle}>Auto-Generated Insights</div><InsightsPanel vehicles={vehicles} eventsMap={eventsMap} allEvents={rawEvents} /></div>
-      </div>
+          {/* Row 1 — KPIs */}
+          <div style={{ ...S.row, gridTemplateColumns: "repeat(4, 1fr)" }}>
+            <KpiCard title="Total Maintenance Spend" value={`$${totalSpend.toLocaleString("en-US", { maximumFractionDigits: 0 })}`} sub="All time" />
+            <KpiCard title="Vehicles Tracked" value={isFiltered ? filteredVehicles.length : vehicles.length} sub={isFiltered ? `filtered from ${vehicles.length} total` : `${rawEvents.length} events logged`} />
+            <KpiCard title="Corrective Rate" value={`${correctivePct}%`} sub="Target: <40%" accent={correctivePct > 40 ? "#dc2626" : "#166534"} />
+            <KpiCard title="Avg Cost / Event" value={`$${avgCost.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub="Per maintenance event" />
+          </div>
+
+          {/* Row 2 — Health + Alerts */}
+          <div style={{ ...S.row, gridTemplateColumns: "1fr 2fr" }}>
+            <div style={S.card}><div style={S.cardTitle}>Fleet Health{isFiltered && <span style={{ fontSize: 11, fontWeight: 400, color: "#3b82f6", marginLeft: 6 }}>(filtered)</span>}</div><StoplightGrid vehicles={filteredVehicles} eventsMap={eventsMap} /></div>
+            <div style={S.card}><div style={S.cardTitle}>Priority Alerts{isFiltered && <span style={{ fontSize: 11, fontWeight: 400, color: "#3b82f6", marginLeft: 6 }}>(filtered)</span>}</div><AlertList vehicles={filteredVehicles} eventsMap={eventsMap} /></div>
+          </div>
+
+          {/* Row 3 — Cost Table + Charts */}
+          <div style={{ ...S.row, gridTemplateColumns: "2fr 1fr" }}>
+            <div style={S.card}><div style={S.cardTitle}>Top Costliest Vehicles</div><CostTable vehicles={filteredVehicles} eventsMap={eventsMap} /></div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+              <div style={S.card}><div style={S.cardTitle}>Corrective vs Preventive</div><CorrectivePieChart allEvents={rawEvents} /></div>
+              <div style={S.card}><div style={S.cardTitle}>Top Service Locations</div><VendorBreakdown allEvents={rawEvents} /></div>
+            </div>
+          </div>
+
+          {/* Row 4 — Insights */}
+          <div style={{ ...S.row, gridTemplateColumns: "1fr" }}>
+            <div style={S.card}><div style={S.cardTitle}>Auto-Generated Insights</div><InsightsPanel vehicles={vehicles} eventsMap={eventsMap} allEvents={rawEvents} /></div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
