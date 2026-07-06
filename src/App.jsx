@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import FleetDashboard from "./components/FleetDashboard.jsx";
 import UtilizationDashboard from "./components/UtilizationDashboard.jsx";
@@ -7,8 +7,8 @@ import BillingDashboard from "./components/BillingDashboard.jsx";
 import ProviderReportsDashboard from "./components/ProviderReportsDashboard.jsx";
 import InvoicesDashboard from "./components/InvoicesDashboard.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
-import UploadModal from "./components/UploadModal.jsx";
 import NoteModal from "./components/NoteModal.jsx";
+import PipelineRefreshButton from "./components/PipelineRefreshButton.jsx";
 import SaturdayCalculator from "./components/SaturdayCalculator.jsx";
 import AdminPanel from "./components/AdminPanel.jsx";
 import UnderConstruction from "./components/UnderConstruction.jsx";
@@ -22,11 +22,8 @@ import { AnnouncementsPage, ReportsPage, OpsCommandPage } from "./components/Wor
 import { LOGO } from "./assets/logo.js";
 import { API_BASE } from "./config/api.js";
 import { MODULES, MODULE_IDS } from "./config/modules.js";
-import { parseErrorWorkbook } from "./utils/tracker.js";
 import useAuth from "./hooks/useAuth.js";
 import useErrorTracker from "./hooks/useErrorTracker.js";
-
-const UPLOAD_PASSWORD = import.meta.env.VITE_UPLOAD_PASSWORD;
 
 // App is the composition layer: it owns the active tab, wires the auth and
 // tracker hooks into the layout, and routes tabs to their page components.
@@ -45,14 +42,9 @@ export default function App() {
   const auth = useAuth(() => setActiveTab("home"));
   const tracker = useErrorTracker(auth.isAuthenticated, showToast);
 
-  // Upload modal UI state (parsing + the actual upload live elsewhere:
-  // utils/tracker.js parses the workbook, the tracker hook talks to the API).
-  const [showUpload, setShowUpload] = useState(false);
-  const [uploadPassword, setUploadPassword] = useState("");
-  const [passwordError, setPasswordError] = useState(false);
-  const [passwordOk, setPasswordOk] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const fileRef = useRef(null);
+  // Bumped after a provider-reports refresh so the dashboard remounts and
+  // re-fetches its data.
+  const [providerReloadKey, setProviderReloadKey] = useState(0);
 
   const [noteModal, setNoteModal] = useState(null); // { key, note }
   const [noteInput, setNoteInput] = useState("");
@@ -72,48 +64,6 @@ export default function App() {
         setSheetDbBannerVisible(true);
       });
   }, []);
-
-  const handlePasswordCheck = () => {
-    if (uploadPassword === UPLOAD_PASSWORD) {
-      setPasswordOk(true);
-      setPasswordError(false);
-    } else {
-      setPasswordError(true);
-    }
-  };
-
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setUploading(true);
-    try {
-      const newData = await parseErrorWorkbook(file);
-
-      if (newData.length === 0) {
-        showToast("No data found in file — check column names");
-        setUploading(false);
-        return;
-      }
-
-      // Single atomic upload: the backend replaces all rows + clears states in
-      // one transaction, so a failure leaves the previous week's data intact.
-      const result = await tracker.uploadErrors(newData);
-      if (!result) {
-        showToast("Upload failed — your previous data is unchanged. Please try again.");
-        setUploading(false);
-        return;
-      }
-
-      setShowUpload(false);
-      setPasswordOk(false);
-      setUploadPassword("");
-      showToast(`✅ Loaded ${newData.length} errors from ${file.name}`);
-    } catch (err) {
-      console.error("Upload error:", err);
-      showToast("Error reading file — make sure it's a valid .xlsx");
-    }
-    setUploading(false);
-  };
 
   // Still checking session — show nothing to avoid flash of login screen
   if (auth.isAuthenticated === null) {
@@ -210,20 +160,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Upload Modal */}
-      {showUpload && (
-        <UploadModal
-          uploadPassword={uploadPassword} setUploadPassword={setUploadPassword}
-          passwordError={passwordError} setPasswordError={setPasswordError}
-          passwordOk={passwordOk}
-          uploading={uploading}
-          fileRef={fileRef}
-          onPasswordCheck={handlePasswordCheck}
-          onFileChange={handleFileUpload}
-          onClose={() => setShowUpload(false)}
-        />
-      )}
-
       {/* ADMIN PANEL */}
       {activeTab === "admin-panel" && userRole === "admin" && (
         <AdminPanel apiBase={API_BASE} modules={MODULES} />
@@ -271,9 +207,9 @@ export default function App() {
           Hidden when UnderConstruction is rendering — UC has its own back button. */}
       {MODULE_IDS.includes(activeTab) && !showUnderConstruction && (
         <div style={{ background: "var(--bg)", borderBottom: "1px solid var(--border)", padding: "10px 24px", display: "flex", alignItems: "center", gap: 12 }}>
-          <button className="back-btn" onClick={() => setActiveTab("home")}
+          <button className="back-btn" onClick={() => setActiveTab("modules")}
             style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, padding: "5px 12px", fontSize: 13, fontWeight: 500, color: "var(--text-2)", cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}>
-            ← Back to Home
+            ← Back to Modules
           </button>
           {(activeTab === "tracker" || activeTab === "calculator") && (
             <>
@@ -286,12 +222,12 @@ export default function App() {
           {activeTab === "tracker" && (
             <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
               {!tracker.loaded && <span style={{ fontSize: 12, color: "var(--text-3)" }}>Loading…</span>}
-              <button
-                onClick={() => { setShowUpload(true); setPasswordOk(false); setUploadPassword(""); setPasswordError(false); }}
-                style={{ background: "var(--text-1)", color: "white", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}
-              >
-                Upload New Week
-              </button>
+              {userRole === "admin" && (
+                <PipelineRefreshButton
+                  pipeline="errors" label="Refresh Data"
+                  onSuccess={tracker.reload} showToast={showToast}
+                />
+              )}
               <div style={{ background: "var(--bg-soft)", border: "1px solid var(--border)", borderRadius: 6, padding: "4px 10px", fontSize: 12, color: "var(--text-2)" }}>
                 {tracker.stats.open} open · {tracker.stats.fixed} fixed
               </div>
@@ -302,6 +238,14 @@ export default function App() {
               )}
             </div>
           )}
+          {activeTab === "provider-reports" && userRole === "admin" && (
+            <div style={{ marginLeft: "auto" }}>
+              <PipelineRefreshButton
+                pipeline="provider_reports" label="Refresh Reports"
+                onSuccess={() => setProviderReloadKey(k => k + 1)} showToast={showToast}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -310,7 +254,7 @@ export default function App() {
       {showUnderConstruction && (
         <UnderConstruction
           moduleName={underConstructionModuleName}
-          onBack={() => setActiveTab("home")}
+          onBack={() => setActiveTab("modules")}
         />
       )}
 
@@ -352,7 +296,7 @@ export default function App() {
       {activeTab === "provider-reports" && !showUnderConstruction && (
         <div className="page-anim">
           <ErrorBoundary moduleName="Provider Reports">
-            <ProviderReportsDashboard onBack={() => setActiveTab("home")} userRole={userRole} />
+            <ProviderReportsDashboard key={providerReloadKey} onBack={() => setActiveTab("home")} userRole={userRole} />
           </ErrorBoundary>
         </div>
       )}

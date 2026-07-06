@@ -49,9 +49,9 @@ export default function useErrorTracker(isAuthenticated, showToast) {
 
   // Load error rows + per-row states from the FastAPI backend.
   // Requires a valid login cookie, so it runs once the user is authenticated.
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    async function load() {
+  // Also returned as `reload` so the admin Refresh button can re-fetch after
+  // the pipeline finishes.
+  const load = useCallback(async () => {
       try {
         const res = await fetch(`${API_BASE}/api/errors`, { credentials: "include" });
         if (res.ok) {
@@ -96,10 +96,13 @@ export default function useErrorTracker(isAuthenticated, showToast) {
         }
       } catch { /* history unavailable — weekly view still works */ }
 
-      setLoaded(true);
-    }
+    setLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
     load();
-  }, [isAuthenticated]);
+  }, [isAuthenticated, load]);
 
   // ── Shared state write helper ────────────────────────────────────────────────
   // Upserts {status, note, flag} for a single row key via the backend.
@@ -214,31 +217,6 @@ export default function useErrorTracker(isAuthenticated, showToast) {
     });
   }, [rawData, statuses]);
 
-  // Replaces the live week's rows on the server, then resets local state and
-  // filters. Returns the server response, or null when the server rejected the
-  // upload (previous data is unchanged — the backend replaces atomically).
-  const uploadErrors = async (newData) => {
-    const res = await fetch(`${API_BASE}/api/errors/upload`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rows: newData }),
-    });
-    if (!res.ok) {
-      console.error("Upload failed", res.status, await res.text().catch(() => ""));
-      return null;
-    }
-    const result = await res.json();
-    setLastUpdated(result.updatedAt || new Date().toISOString());
-    setStatuses({});
-    setNotes({});
-    setFlags({});
-    setRawData(assignRowKeys(newData));
-    setSelectedCenter("All Centers");
-    setSelectedCategory("All Types");
-    return result;
-  };
-
   return {
     rawData, history,
     trackerView, setTrackerView,
@@ -252,6 +230,6 @@ export default function useErrorTracker(isAuthenticated, showToast) {
     carryoverRows, locations, categories, weeks,
     filtered, stats, centerStats,
     saveStatus, saveNote, saveFlag,
-    uploadErrors,
+    reload: load,
   };
 }

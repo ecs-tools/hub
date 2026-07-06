@@ -2,7 +2,7 @@ import React from "react";
 
 // Placeholder shown to manager-role users on modules that aren't ready yet.
 // Per spec: matches navy/steel palette, includes a construction icon, module
-// name as heading, the standardized "← Back to Home" button, and short copy.
+// name as heading, the standardized "← Back to Modules" button, and short copy.
 function UnderConstruction({ moduleName, onBack }) {
   return (
     <div className="page-anim" style={{ padding: "32px 40px", maxWidth: 760, margin: "0 auto" }}>
@@ -25,7 +25,7 @@ function UnderConstruction({ moduleName, onBack }) {
           marginBottom: 24,
         }}
       >
-        ← Back to Home
+        ← Back to Modules
       </button>
       <div style={{
         background: "white",
