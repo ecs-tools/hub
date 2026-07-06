@@ -1,12 +1,11 @@
 import React, { useMemo } from "react";
+// makeKey MUST come from utils/tracker.js: statuses are keyed by its output
+// (the rows' assigned _key). The private copy this file used to have built
+// keys in a different format, so every status lookup missed and the Home
+// cards counted all errors as open regardless of what managers marked.
+import { makeKey, centerName } from "../utils/tracker.js";
 
-// ── Shared helpers ────────────────────────────────────────────────────────────
-function makeKey(row, idx) {
-  return `${row.location}-${row.name}-${row.date}-${idx}`;
-}
-function centerName(location) {
-  return location ? String(location).split(" ")[0] : "";
-}
+// ── Local helpers ─────────────────────────────────────────────────────────────
 function startOfWeek() {
   const d = new Date(); d.setHours(0, 0, 0, 0);
   d.setDate(d.getDate() - d.getDay()); return d;
