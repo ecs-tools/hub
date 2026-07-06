@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { API_BASE } from "../config/api.js";
 
 // Migrated off SheetDB → FastAPI backend (Postgres). Same JSON shape as before,
 // so the parsing below is unchanged; only the source URL differs.
-const API_BASE = import.meta.env.VITE_API_BASE || "https://web-production-3b1f4.up.railway.app";
 const VEHICLE_LIST_URL = `${API_BASE}/api/fleet/vehicles`;
 const MAINTENANCE_URL  = `${API_BASE}/api/fleet/maintenance`;
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { API_BASE } from "../config/api.js";
 
 // Invoice Manager — the invoice side of AR (county / private-pay / flat-monthly
 // PDFs recorded in raw.invoice_registry by the generator tools). The claim side
@@ -8,7 +9,6 @@ import React, { useState, useEffect, useMemo } from "react";
 // fields (admin-only server-side). The backend answers { ready: false } until
 // the registry table has been created, and this component explains that state
 // instead of erroring — so it is always safe to ship ahead of the database.
-const API_BASE = import.meta.env.VITE_API_BASE || "https://web-production-3b1f4.up.railway.app";
 
 const S = {
   body:      { padding: "24px 32px", maxWidth: 1400, margin: "0 auto" },
