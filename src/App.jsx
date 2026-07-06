@@ -1,7 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import * as XLSX from "https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs";
-import { CENTERS, CENTERS_WITH_ALL } from "./config/centers.js";
-// CENTER_RATES and ACUITY_RATIOS are now used only in SaturdayCalculator.jsx
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import FleetDashboard from "./components/FleetDashboard.jsx";
 import UtilizationDashboard from "./components/UtilizationDashboard.jsx";
@@ -13,603 +10,53 @@ import LoginScreen from "./components/LoginScreen.jsx";
 import UploadModal from "./components/UploadModal.jsx";
 import NoteModal from "./components/NoteModal.jsx";
 import SaturdayCalculator from "./components/SaturdayCalculator.jsx";
-
-// `category` groups the cards on the Modules page. Order within a category
-// follows this array; the category sections render in MODULE_CATEGORIES order.
-const MODULES = [
-  { id: "tracker",     name: "Billing Error Detection", category: "Billing", description: "Log and track weekly billing errors across transportation and attendance.", available: true },
-  { id: "billing",     name: "Billing Overview",        category: "Billing", description: "Weekly, monthly, and total billing metrics.", available: true },
-  { id: "provider-reports", name: "Provider Reports",   category: "Billing", description: "DODD Medicaid billing reports (errors, claims, invoices, denied) by billing cycle.", available: true },
-  { id: "invoices",    name: "Invoice Manager",         category: "Billing", description: "Every generated invoice with live open balance, aging buckets, and one-click payment tracking.", available: true },
-  { id: "calculator",  name: "Saturday Calculator",     category: "Tools",   description: "Estimate staffing costs and profitability for Saturday programming.", available: false },
-  { id: "fleet",       name: "Fleet Dashboard",         category: "Reports", description: "Monitor vehicle maintenance status and service history.", available: false },
-  { id: "utilization", name: "Utilization Tracker",     category: "Reports", description: "Track PAWS funding utilization and alert when clients approach limits.", available: false },
-];
-
-// Section order on the Modules page. A module whose category isn't listed here
-// falls into "Other" at the end, so nothing ever silently disappears.
-const MODULE_CATEGORIES = ["Billing", "Reports", "Tools"];
+import AdminPanel from "./components/AdminPanel.jsx";
+import UnderConstruction from "./components/UnderConstruction.jsx";
+import HelpCenter from "./components/HelpCenter.jsx";
+import ErrorTracker from "./components/ErrorTracker.jsx";
+import Sidebar from "./components/Sidebar.jsx";
+import TopBar from "./components/TopBar.jsx";
+import GlobalStyles from "./components/GlobalStyles.jsx";
+import ModulesPage from "./components/ModulesPage.jsx";
+import { AnnouncementsPage, ReportsPage, OpsCommandPage } from "./components/WorkspacePages.jsx";
+import { LOGO } from "./assets/logo.js";
+import { API_BASE } from "./config/api.js";
+import { MODULES, MODULE_IDS } from "./config/modules.js";
+import { parseErrorWorkbook } from "./utils/tracker.js";
+import useAuth from "./hooks/useAuth.js";
+import useErrorTracker from "./hooks/useErrorTracker.js";
 
 const UPLOAD_PASSWORD = import.meta.env.VITE_UPLOAD_PASSWORD;
-// Auth is now handled by the FastAPI backend (JWT cookie).
-// VITE_APP_PASSWORD and VITE_ADMIN_PASSWORD are no longer used here.
-const API_BASE = import.meta.env.VITE_API_BASE || "https://web-production-3b1f4.up.railway.app";
-const INACTIVITY_TIMEOUT = 60 * 60 * 1000;
-const ADMIN_TIMEOUT = 4 * 60 * 60 * 1000;
-const LOGO = "data:image/png;base64,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";
 
-const DEFAULT_DATA = [];
-
-const STATUS_OPTIONS = [
-  { value: "fixed", label: "Fixed", icon: "✅", color: "#16a34a", bg: "#dcfce7", border: "#86efac" },
-  { value: "disputed", label: "Not an Error", icon: "❌", color: "#dc2626", bg: "#fee2e2", border: "#fca5a5" },
-  { value: "open", label: "Open", icon: "⚪", color: "#6b7280", bg: "#f3f4f6", border: "#d1d5db" },
-];
-
-const CATEGORY_COLORS = {
-  "Not Found in Attendance": { bg: "#fef2f2", text: "#991b1b", border: "#fecaca" },
-  "Arrival Before Pickup": { bg: "#fff7ed", text: "#9a3412", border: "#fed7aa" },
-  "Bus/Check-in Time Mismatch": { bg: "#fefce8", text: "#854d0e", border: "#fef08a" },
-  "Takehome Time Mismatch": { bg: "#f0f9ff", text: "#0c4a6e", border: "#bae6fd" },
-  "Missing Pickup Time": { bg: "#fdf4ff", text: "#6b21a8", border: "#e9d5ff" },
-  "Missing Goal Documentation": { bg: "#f0fdf4", text: "#14532d", border: "#bbf7d0" },
-  "Invalid Time": { bg: "#faf5ff", text: "#4c1d95", border: "#ddd6fe" },
-};
-
-// Stable, content-based row key. Including the date means manager statuses
-// re-attach to the same errors across the day's repeated pipeline re-uploads,
-// yet reset on their own when a new week's dated errors arrive. The `#n`
-// suffix (assigned by assignRowKeys) disambiguates true duplicates.
-function makeKey(row, idx) {
-  return row._key ?? `${row.location}|${row.name}|${row.date}|${row.reason}#${idx}`;
-}
-
-// Tag each row with a stable _key. Identical rows get an incrementing #n so
-// two genuine duplicates don't collapse onto one shared status.
-function assignRowKeys(rows) {
-  const seen = {};
-  return rows.map(row => {
-    const base = `${row.location}|${row.name}|${row.date}|${row.reason}`;
-    const n = (seen[base] = (seen[base] || 0) + 1);
-    return { ...row, _key: `${base}#${n}` };
-  });
-}
-
-function centerName(location) {
-  return location ? location.split(" ")[0] : "";
-}
-
-function progressColor(pct) {
-  if (pct <= 50) {
-    const t = pct / 50;
-    const r = Math.round(239 + (234 - 239) * t);
-    const g = Math.round(68 + (179 - 68) * t);
-    const b = Math.round(68 + (8 - 68) * t);
-    return `rgb(${r},${g},${b})`;
-  } else {
-    const t = (pct - 50) / 50;
-    const r = Math.round(234 + (34 - 234) * t);
-    const g = Math.round(179 + (197 - 179) * t);
-    const b = Math.round(8 + (94 - 8) * t);
-    return `rgb(${r},${g},${b})`;
-  }
-}
-
-function parseExcelDate(val) {
-  if (!val) return "";
-  if (typeof val === "number") {
-    const d = new Date(Math.round((val - 25569) * 86400 * 1000));
-    const y = d.getUTCFullYear();
-    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-    const day = String(d.getUTCDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  }
-  if (typeof val === "string") {
-    const parts = val.split("/");
-    if (parts.length === 3) {
-      return `${parts[2]}-${parts[0].padStart(2,"0")}-${parts[1].padStart(2,"0")}`;
-    }
-    return val;
-  }
-  return String(val);
-}
-
-function categorizeReason(reason) {
-  if (!reason) return "Other";
-  const r = String(reason).toLowerCase();
-  if (r.includes("not found in attendance") || r.includes("transported but not found")) return "Not Found in Attendance";
-  if (r.includes("nmt without adult day")) return "Transport Violation";
-  if (r.includes("units billed")) return "Invalid Units";
-  if (r.includes("arrival time is before pickup") || r.includes("before pickup end")) return "Arrival Before Pickup";
-  if (r.includes("bus ended") && r.includes("checked in")) return "Bus/Check-in Time Mismatch";
-  if (r.includes("takehome") || r.includes("bus departure")) return "Takehome Time Mismatch";
-  if (r.includes("pickup start missing") || r.includes("pickup end exists")) return "Missing Pickup Time";
-  if (r.includes("goal documentation")) return "Missing Goal Documentation";
-  if (r.includes("invalid")) return "Invalid Time";
-  return "Other";
-}
-
-function FaqItem({ question, answer }) {
-  const [open, setOpen] = React.useState(false);
-  return (
-    <div style={{ marginBottom: 4 }}>
-      <button onClick={() => setOpen(!open)}
-        style={{ width: "100%", textAlign: "left", background: "white", border: `1.5px solid ${open ? "var(--steel)" : "var(--border)"}`,
-          borderRadius: open ? "10px 10px 0 0" : 10, padding: "14px 18px", fontSize: 14, fontWeight: 600,
-          color: "var(--navy)", cursor: "pointer", fontFamily: "inherit", display: "flex", justifyContent: "space-between", alignItems: "center",
-          marginBottom: open ? 0 : 4 }}>
-        {question}
-        <span style={{ transition: "transform 0.2s", display: "inline-block", transform: open ? "rotate(180deg)" : "none", color: "var(--muted)", fontSize: 12 }}>▼</span>
-      </button>
-      {open && (
-        <div style={{ background: "#f8fbff", border: "1.5px solid var(--steel)", borderTop: "none", borderRadius: "0 0 10px 10px", padding: "14px 18px", fontSize: 13, color: "var(--muted)", lineHeight: 1.7, marginBottom: 4 }}>
-          {answer}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Placeholder shown to manager-role users on modules that aren't ready yet.
-// Per spec: matches navy/steel palette, includes a construction icon, module
-// name as heading, the standardized "← Back to Home" button, and short copy.
-function UnderConstruction({ moduleName, onBack }) {
-  return (
-    <div className="page-anim" style={{ padding: "32px 40px", maxWidth: 760, margin: "0 auto" }}>
-      <button
-        className="back-btn"
-        onClick={onBack}
-        style={{
-          background: "none",
-          border: "1px solid var(--border)",
-          borderRadius: 6,
-          padding: "5px 12px",
-          fontSize: 13,
-          fontWeight: 500,
-          color: "var(--text-2)",
-          cursor: "pointer",
-          fontFamily: "inherit",
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          marginBottom: 24,
-        }}
-      >
-        ← Back to Home
-      </button>
-      <div style={{
-        background: "white",
-        border: "1px solid var(--border)",
-        borderRadius: 12,
-        padding: "56px 48px",
-        textAlign: "center",
-        boxShadow: "0 1px 4px rgba(0,0,0,0.04)",
-      }}>
-        <div style={{ fontSize: 52, marginBottom: 16, lineHeight: 1 }} aria-hidden="true">🚧</div>
-        <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", color: "var(--steel)", marginBottom: 8 }}>
-          Coming Soon
-        </div>
-        <h2 style={{ fontSize: 24, fontWeight: 700, color: "var(--navy)", margin: "0 0 8px", letterSpacing: "-0.4px" }}>
-          {moduleName}
-        </h2>
-        <div style={{ fontSize: 14, color: "var(--text-2)", marginBottom: 14, fontWeight: 500 }}>
-          This module is coming soon.
-        </div>
-        <div style={{ fontSize: 13, color: "var(--muted)", maxWidth: 420, margin: "0 auto", lineHeight: 1.6 }}>
-          We're working on making this available. Check back soon or contact your administrator.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Admin Panel Component ─────────────────────────────────────────────────────
-function AdminPanel({ apiBase, modules }) {
-  const [users, setUsers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState({});
-  const [toast, setToast] = useState(null);
-  const [search, setSearch] = useState("");
-  const [resetModal, setResetModal] = useState(null); // username being reset
-  const [resetPw, setResetPw] = useState("");
-  const [resetSaving, setResetSaving] = useState(false);
-
-  const showToast = (msg, ok = true) => {
-    setToast({ msg, ok });
-    setTimeout(() => setToast(null), 2500);
-  };
-
-  // Surface the server's actual reason (e.g. "You cannot demote your own
-  // account") instead of a generic failure message.
-  const detailOf = async (res, fallback) => {
-    try { return (await res.json()).detail || fallback; } catch { return fallback; }
-  };
-
-  const fetchUsers = () => {
-    setLoading(true);
-    fetch(`${apiBase}/admin/users`, { credentials: "include" })
-      .then(r => r.json())
-      .then(data => { setUsers(Array.isArray(data) ? data : []); setLoading(false); })
-      .catch(() => { showToast("Failed to load users", false); setLoading(false); });
-  };
-
-  useEffect(() => { fetchUsers(); }, []);
-
-  const setRole = async (username, role) => {
-    setSaving(s => ({ ...s, [username]: true }));
-    const res = await fetch(`${apiBase}/admin/users/${username}/role`, {
-      method: "PATCH", credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setUsers(prev => prev.map(u => u.username === username
-        ? { ...u, role: data.role, permissions: data.permissions } : u));
-      showToast(`${username} is now ${role}`);
-    } else { showToast(await detailOf(res, "Failed to update role"), false); }
-    setSaving(s => ({ ...s, [username]: false }));
-  };
-
-  const resetPassword = async () => {
-    setResetSaving(true);
-    const res = await fetch(`${apiBase}/admin/users/${resetModal}/password`, {
-      method: "POST", credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: resetPw }),
-    });
-    if (res.ok) { showToast(`Password reset for ${resetModal}`); setResetModal(null); setResetPw(""); }
-    else { showToast(await detailOf(res, "Failed to reset password"), false); }
-    setResetSaving(false);
-  };
-
-  const togglePermission = async (username, moduleId, current) => {
-    setSaving(s => ({ ...s, [`${username}-${moduleId}`]: true }));
-    const res = await fetch(`${apiBase}/admin/users/${username}/permissions`, {
-      method: "PATCH", credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ permissions: { [moduleId]: !current } }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setUsers(prev => prev.map(u => u.username === username
-        ? { ...u, permissions: data.permissions } : u));
-    } else { showToast("Failed to update permission", false); }
-    setSaving(s => ({ ...s, [`${username}-${moduleId}`]: false }));
-  };
-
-  const deleteUser = async (username) => {
-    if (!window.confirm(`Delete user "${username}"? This cannot be undone.`)) return;
-    const res = await fetch(`${apiBase}/admin/users/${username}`, {
-      method: "DELETE", credentials: "include",
-    });
-    if (res.ok) { setUsers(prev => prev.filter(u => u.username !== username)); showToast(`${username} deleted`); }
-    else { showToast(await detailOf(res, "Failed to delete user"), false); }
-  };
-
-  const visibleUsers = users.filter(u => {
-    const q = search.trim().toLowerCase();
-    if (!q) return true;
-    return u.username.toLowerCase().includes(q)
-      || (u.center || "").toLowerCase().includes(q)
-      || u.role.toLowerCase().includes(q);
-  });
-
-  const ROLE_COLORS = {
-    admin:   { bg: "#fef3c7", text: "#92400e", border: "#fde68a" },
-    manager: { bg: "#dbeafe", text: "#1e40af", border: "#bfdbfe" },
-    staff:   { bg: "#f0fdf4", text: "#166534", border: "#bbf7d0" },
-  };
-
-  return (
-    <div className="page-anim" style={{ padding: "32px 40px", maxWidth: 1100, margin: "0 auto" }}>
-      {toast && (
-        <div style={{ position: "fixed", bottom: 24, right: 24, background: toast.ok ? "#0f172a" : "#dc2626", color: "#fff", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 500, zIndex: 9999, boxShadow: "0 4px 20px rgba(0,0,0,0.2)" }}>
-          {toast.msg}
-        </div>
-      )}
-
-      <div style={{ marginBottom: 28, display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-        <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, color: "var(--navy)", margin: "0 0 4px", letterSpacing: "-0.3px" }}>Admin Panel</h1>
-          <p style={{ fontSize: 13, color: "var(--text-2)", margin: 0 }}>Manage user accounts, roles, and module access. Changes save instantly.</p>
-        </div>
-        <input
-          type="text" placeholder="Search users…" value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{ border: "1.5px solid var(--border)", borderRadius: 8, padding: "8px 14px", fontSize: 13, width: 220, outline: "none", fontFamily: "inherit", background: search ? "#eff6ff" : "white" }}
-        />
-      </div>
-
-      {/* Reset-password modal */}
-      {resetModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setResetModal(null)}>
-          <div style={{ background: "white", borderRadius: 12, padding: "26px 28px", width: 360, boxShadow: "0 8px 30px rgba(0,0,0,0.2)" }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "var(--navy)", marginBottom: 2 }}>Reset password</div>
-            <div style={{ fontSize: 13, color: "var(--text-2)", marginBottom: 16 }}>Set a new password for <strong>{resetModal}</strong>. Share it with them privately — they can't recover the old one.</div>
-            <input
-              type="text" placeholder="New password (min 8 characters)" value={resetPw}
-              onChange={e => setResetPw(e.target.value)} autoFocus
-              style={{ width: "100%", boxSizing: "border-box", border: "1.5px solid var(--border)", borderRadius: 8, padding: "9px 12px", fontSize: 14, fontFamily: "inherit", marginBottom: 16 }}
-            />
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button onClick={() => { setResetModal(null); setResetPw(""); }}
-                style={{ background: "white", border: "1px solid var(--border)", borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", color: "var(--text-2)" }}>
-                Cancel
-              </button>
-              <button onClick={resetPassword} disabled={resetPw.length < 8 || resetSaving}
-                style={{ background: resetPw.length >= 8 ? "var(--navy)" : "#94a3b8", color: "white", border: "none", borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: resetPw.length >= 8 ? "pointer" : "default", fontFamily: "inherit" }}>
-                {resetSaving ? "Saving…" : "Reset password"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Stats row */}
-      <div style={{ display: "flex", gap: 14, marginBottom: 28, flexWrap: "wrap" }}>
-        {[
-          { label: "Total Users", value: users.length },
-          { label: "Admins", value: users.filter(u => u.role === "admin").length },
-          { label: "Managers", value: users.filter(u => u.role === "manager").length },
-          { label: "Staff", value: users.filter(u => u.role === "staff").length },
-        ].map(s => (
-          <div key={s.label} style={{ background: "white", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 20px", minWidth: 110 }}>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "var(--navy)" }}>{s.value}</div>
-            <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 2 }}>{s.label}</div>
-          </div>
-        ))}
-      </div>
-
-      {loading ? (
-        <div style={{ color: "var(--text-2)", padding: 40, textAlign: "center" }}>Loading users…</div>
-      ) : (
-        <div style={{ background: "white", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
-          {/* Table header */}
-          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 0.9fr 1fr auto", gap: 12, padding: "11px 20px", background: "var(--bg-soft)", borderBottom: "1px solid var(--border)", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.6px", color: "var(--text-2)" }}>
-            <span>User</span><span>Role</span><span>Center</span><span>Module Access</span><span></span>
-          </div>
-
-          {visibleUsers.length === 0 && (
-            <div style={{ padding: 32, textAlign: "center", color: "var(--text-2)", fontSize: 13 }}>
-              {search ? `No users match "${search}".` : "No users found."}
-            </div>
-          )}
-
-          {visibleUsers.map((user, idx) => {
-            const rc = ROLE_COLORS[user.role] || ROLE_COLORS.staff;
-            const joinDate = user.created_at ? new Date(user.created_at).toLocaleDateString() : "—";
-            return (
-              <div key={user.username} style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 0.9fr 1fr auto", gap: 12, padding: "14px 20px", borderBottom: idx < visibleUsers.length - 1 ? "1px solid var(--border)" : "none", alignItems: "start" }}>
-
-                {/* User info */}
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: "var(--navy)" }}>{user.username}</div>
-                  <div style={{ fontSize: 11, color: "var(--text-2)", marginTop: 2 }}>Joined {joinDate}</div>
-                </div>
-
-                {/* Role selector */}
-                <div>
-                  <select
-                    value={user.role}
-                    onChange={e => setRole(user.username, e.target.value)}
-                    disabled={saving[user.username]}
-                    style={{ fontSize: 12, fontWeight: 600, border: `1.5px solid ${rc.border}`, borderRadius: 6, padding: "4px 8px", background: rc.bg, color: rc.text, cursor: "pointer", outline: "none", width: "100%" }}
-                  >
-                    <option value="staff">Staff</option>
-                    <option value="manager">Manager</option>
-                    <option value="admin">Admin</option>
-                  </select>
-                </div>
-
-                {/* Center */}
-                <div style={{ fontSize: 13, color: "var(--text-1)", paddingTop: 4 }}>
-                  {user.center || <span style={{ color: "var(--text-3)" }}>—</span>}
-                </div>
-
-                {/* Module permission toggles */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                  {modules.map(mod => {
-                    const on = user.permissions[mod.id] === true;
-                    const key = `${user.username}-${mod.id}`;
-                    return (
-                      <label key={mod.id} style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", fontSize: 12 }}>
-                        <div
-                          onClick={() => togglePermission(user.username, mod.id, on)}
-                          style={{
-                            width: 32, height: 18, borderRadius: 9, background: on ? "#3b82f6" : "#d1d5db",
-                            position: "relative", cursor: "pointer", transition: "background 0.2s", flexShrink: 0,
-                            opacity: saving[key] ? 0.5 : 1,
-                          }}
-                        >
-                          <div style={{ position: "absolute", top: 2, left: on ? 16 : 2, width: 14, height: 14, borderRadius: "50%", background: "white", transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }} />
-                        </div>
-                        <span style={{ color: on ? "var(--text-1)" : "var(--text-3)" }}>{mod.name}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-
-                {/* Row actions */}
-                <div style={{ paddingTop: 2, display: "flex", flexDirection: "column", gap: 6 }}>
-                  <button
-                    onClick={() => { setResetModal(user.username); setResetPw(""); }}
-                    title="Set a new password for this user"
-                    style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, padding: "4px 8px", fontSize: 11, color: "var(--text-2)", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}
-                    onMouseOver={e => { e.currentTarget.style.background = "var(--bg-soft)"; }}
-                    onMouseOut={e => { e.currentTarget.style.background = "none"; }}
-                  >
-                    Reset password
-                  </button>
-                  <button
-                    onClick={() => deleteUser(user.username)}
-                    title="Delete user"
-                    style={{ background: "none", border: "1px solid #fca5a5", borderRadius: 6, padding: "4px 8px", fontSize: 11, color: "#dc2626", cursor: "pointer", fontFamily: "inherit" }}
-                    onMouseOver={e => { e.currentTarget.style.background = "#fef2f2"; }}
-                    onMouseOut={e => { e.currentTarget.style.background = "none"; }}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
+// App is the composition layer: it owns the active tab, wires the auth and
+// tracker hooks into the layout, and routes tabs to their page components.
+// Auth logic lives in hooks/useAuth.js; tracker data in hooks/useErrorTracker.js.
 export default function App() {
-  // Auth state: null = "not yet checked", false = "not logged in", true = "logged in".
-  // On mount we call GET /auth/me to see if the browser already has a valid JWT cookie.
-  const [isAuthenticated, setIsAuthenticated] = useState(null);
-  const [loginUsername, setLoginUsername] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [loginError, setLoginError] = useState("");
-
-  // Registration form state
-  const [showRegister, setShowRegister] = useState(false);
-  const [regInviteCode, setRegInviteCode] = useState("");
-  const [regUsername, setRegUsername] = useState("");
-  const [regPassword, setRegPassword] = useState("");
-  const [regConfirm, setRegConfirm] = useState("");
-  const [regCenter, setRegCenter] = useState("");
-  const [regError, setRegError] = useState("");
-  const [regLoading, setRegLoading] = useState(false);
-
-  const [rawData, setRawData] = useState(DEFAULT_DATA);
-  const [history, setHistory] = useState([]);            // year backlog (staging.error_history)
-  const [trackerView, setTrackerView] = useState("week"); // week | backlog | carryover
-  const [selectedWeek, setSelectedWeek] = useState("All Weeks");
-  const [selectedCenter, setSelectedCenter] = useState("All Centers");
-  const [selectedCategory, setSelectedCategory] = useState("All Types");
-  const [statuses, setStatuses] = useState({});
-  const [notes, setNotes] = useState({});
-  const [flags, setFlags] = useState({});
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const [noteInput, setNoteInput] = useState("");
-  const [saving, setSaving] = useState(false);
-  // Per-key save mutex: tracks keys currently being written to SheetDB.
-  // If a second save arrives for the same key while one is in-flight, the
-  // latest value is stored here and applied as soon as the in-flight write
-  // finishes — eliminating the search-then-write race condition.
-  const saveInFlight = useRef({}); // key → true if a write is running
-  const savePending  = useRef({}); // key → { type, value } of the latest queued value
-  const [loaded, setLoaded] = useState(false);
-  const [toast, setToast] = useState(null);
-  const [sortField, setSortField] = useState(null);
-  const [sortDir, setSortDir] = useState("asc");
-  const [noteModal, setNoteModal] = useState(null); // { key, note }
   const [activeTab, setActiveTab] = useState("home");
-  const [userRole, setUserRole] = useState("staff");
-  const [userPermissions, setUserPermissions] = useState({});
 
-  // Saturday Calculator state and logic have moved to SaturdayCalculator.jsx
+  const [toast, setToast] = useState(null);
+  // Stable identity so the tracker hook's useCallbacks can list it as a dep
+  // without being recreated every render.
+  const showToast = useCallback((msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2500);
+  }, []);
+
+  const auth = useAuth(() => setActiveTab("home"));
+  const tracker = useErrorTracker(auth.isAuthenticated, showToast);
+
+  // Upload modal UI state (parsing + the actual upload live elsewhere:
+  // utils/tracker.js parses the workbook, the tracker hook talks to the API).
   const [showUpload, setShowUpload] = useState(false);
   const [uploadPassword, setUploadPassword] = useState("");
   const [passwordError, setPasswordError] = useState(false);
   const [passwordOk, setPasswordOk] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
+
+  const [noteModal, setNoteModal] = useState(null); // { key, note }
+  const [noteInput, setNoteInput] = useState("");
   const [sheetDbBannerVisible, setSheetDbBannerVisible] = useState(false);
-
-  // ── Tracker datasets ─────────────────────────────────────────────────────────
-  // This Week = the live working set (replaced by each pipeline upload).
-  // Backlog   = every 2026 error ever uploaded (error_history; never deleted).
-  // Carryover = backlog rows that aged out of the live set (their week's
-  //             Mon-Wed pipeline runs are over) without a manager resolving
-  //             them — i.e. "still not fixed by Wednesday".
-  // Statuses are keyed by row content, so one status map serves all views.
-  const liveKeys = useMemo(() => new Set(rawData.map(r => r._key)), [rawData]);
-  const carryoverRows = useMemo(
-    () => history.filter(r => !liveKeys.has(r._key) && !["fixed", "disputed"].includes(statuses[r._key])),
-    [history, liveKeys, statuses]
-  );
-  const activeData = trackerView === "backlog" ? history : trackerView === "carryover" ? carryoverRows : rawData;
-
-  const locations = ["All Centers", ...Array.from(new Set(activeData.map(r => centerName(r.location)))).filter(Boolean).sort()];
-  const categories = ["All Types", ...Array.from(new Set(activeData.map(r => r.category))).filter(Boolean).sort()];
-  const weeks = ["All Weeks", ...Array.from(new Set(history.map(r => r.week))).filter(Boolean).sort().reverse()];
-
-  // Load error rows + per-row states from the FastAPI backend (was SheetDB).
-  // Requires a valid login cookie, so it runs once the user is authenticated.
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    async function load() {
-      try {
-        const res = await fetch(`${API_BASE}/api/errors`, { credentials: "include" });
-        if (res.ok) {
-          const data = await res.json();
-          const s = {}, n = {}, f = {};
-          Object.entries(data.states || {}).forEach(([key, st]) => {
-            if (st.status) s[key] = st.status;
-            if (st.note) n[key] = st.note;
-            if (st.flag) f[key] = true;
-          });
-          setStatuses(s);
-          setNotes(n);
-          setFlags(f);
-          if (data.updatedAt) setLastUpdated(data.updatedAt);
-          if (Array.isArray(data.rows)) {
-            setRawData(assignRowKeys(data.rows.map(r => ({
-              name: r.name || "",
-              location: r.location || "",
-              date: r.date || "",
-              reason: r.reason || "",
-              category: r.category || "",
-            }))));
-          }
-        }
-      } catch { /* ignore */ }
-
-      // Year backlog — served by /api/errors/history. Keys come from the
-      // server (same content-key scheme), so statuses join with no extra work.
-      // If the endpoint isn't deployed yet, the Backlog/Carryover views simply
-      // stay hidden.
-      try {
-        const hres = await fetch(`${API_BASE}/api/errors/history`, { credentials: "include" });
-        if (hres.ok) {
-          const hdata = await hres.json();
-          if (Array.isArray(hdata.rows)) {
-            setHistory(hdata.rows.map(r => ({
-              name: r.name || "", location: r.location || "", date: r.date || "",
-              reason: r.reason || "", category: r.category || "",
-              _key: r.row_key, week: r.week_label || "",
-            })));
-          }
-        }
-      } catch { /* history unavailable — weekly view still works */ }
-
-      setLoaded(true);
-    }
-    load();
-  }, [isAuthenticated]);
-
-  // Inactivity timeout: after 1 hour of no activity, hit /auth/logout so the
-  // cookie is cleared server-side and the user is returned to the login screen.
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    let lastActive = Date.now();
-    const updateActivity = () => { lastActive = Date.now(); };
-    const timeoutMs = userRole === "admin" ? ADMIN_TIMEOUT : INACTIVITY_TIMEOUT;
-    const events = ["mousedown", "keydown", "touchstart", "scroll"];
-    events.forEach(e => window.addEventListener(e, updateActivity));
-
-    const interval = setInterval(async () => {
-      if (Date.now() - lastActive > timeoutMs) {
-        await fetch(`${API_BASE}/auth/logout`, { method: "POST", credentials: "include" });
-        setIsAuthenticated(false);
-        setUserRole("manager");
-        setActiveTab("home");
-      }
-    }, 30000);
-
-    return () => {
-      events.forEach(e => window.removeEventListener(e, updateActivity));
-      clearInterval(interval);
-    };
-  }, [isAuthenticated, userRole]);
 
   // Backend health check — fire-and-forget on mount
   useEffect(() => {
@@ -626,91 +73,6 @@ export default function App() {
       });
   }, []);
 
-  // On mount: ask the backend if we already have a valid session cookie.
-  // If yes, we skip the login screen entirely — this is what keeps managers
-  // logged in after Chrome saves their credentials.
-  useEffect(() => {
-    fetch(`${API_BASE}/auth/me`, { credentials: "include" })
-      .then(res => res.ok ? res.json() : null)
-      .then(data => {
-        if (data?.username) {
-          setIsAuthenticated(true);
-          setUserRole(data.role || "staff");
-          setUserPermissions(data.permissions || {});
-        } else {
-          setIsAuthenticated(false);
-        }
-      })
-      .catch(() => setIsAuthenticated(false));
-  }, []);
-
-  const handleLogout = async () => {
-    await fetch(`${API_BASE}/auth/logout`, { method: "POST", credentials: "include" });
-    setIsAuthenticated(false);
-    setUserRole("manager");
-    setActiveTab("home");
-  };
-
-  const handleLogin = async () => {
-    setLoginError("");
-    try {
-      const res = await fetch(`${API_BASE}/auth/login`, {
-        method: "POST",
-        credentials: "include",   // tells browser to accept + store the cookie
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
-      });
-      if (res.ok) {
-        // Login only returns role — fetch full profile (with permissions) from /auth/me
-        const meRes = await fetch(`${API_BASE}/auth/me`, { credentials: "include" });
-        const meData = await meRes.json();
-        setIsAuthenticated(true);
-        setUserRole(meData.role || "staff");
-        setUserPermissions(meData.permissions || {});
-        setLoginUsername("");
-        setLoginPassword("");
-      } else {
-        setLoginError("Incorrect username or password. Try again.");
-      }
-    } catch {
-      setLoginError("Could not reach the server. Check your connection.");
-    }
-  };
-
-  const handleRegister = async () => {
-    setRegError("");
-    if (!regCenter) { setRegError("Please select your center."); return; }
-    if (regPassword !== regConfirm) { setRegError("Passwords do not match."); return; }
-    if (regPassword.length < 8) { setRegError("Password must be at least 8 characters."); return; }
-    if (regUsername.trim().length < 3) { setRegError("Username must be at least 3 characters."); return; }
-    setRegLoading(true);
-    try {
-      const res = await fetch(`${API_BASE}/auth/register-self`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invite_code: regInviteCode, username: regUsername.trim(), password: regPassword, center: regCenter }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setIsAuthenticated(true);
-        setUserRole(data.role || "staff");
-        setUserPermissions(data.permissions || {});
-        setShowRegister(false);
-      } else {
-        setRegError(data.detail || "Registration failed. Try again.");
-      }
-    } catch {
-      setRegError("Could not reach the server. Check your connection.");
-    }
-    setRegLoading(false);
-  };
-
-  const showToast = (msg) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 2500);
-  };
-
   const handlePasswordCheck = () => {
     if (uploadPassword === UPLOAD_PASSWORD) {
       setPasswordOk(true);
@@ -725,27 +87,7 @@ export default function App() {
     if (!file) return;
     setUploading(true);
     try {
-      const { read, utils } = await import("https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs");
-      const buf = await file.arrayBuffer();
-      const wb = read(buf);
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = utils.sheet_to_json(ws, { defval: "" });
-
-      const newData = rows.map(row => {
-        const keys = Object.keys(row);
-        const nameKey = keys.find(k => /name/i.test(k)) || keys[0];
-        const locKey = keys.find(k => /location|center|site/i.test(k)) || keys[1];
-        const dateKey = keys.find(k => /date/i.test(k)) || keys[2];
-        const reasonKey = keys.find(k => /reason|error|message|description/i.test(k)) || keys[3];
-        const reason = String(row[reasonKey] || "");
-        return {
-          name: String(row[nameKey] || "").trim(),
-          location: String(row[locKey] || "").trim(),
-          date: parseExcelDate(row[dateKey]),
-          reason,
-          category: categorizeReason(reason),
-        };
-      }).filter(r => r.name && r.location);
+      const newData = await parseErrorWorkbook(file);
 
       if (newData.length === 0) {
         showToast("No data found in file — check column names");
@@ -755,27 +97,13 @@ export default function App() {
 
       // Single atomic upload: the backend replaces all rows + clears states in
       // one transaction, so a failure leaves the previous week's data intact.
-      const res = await fetch(`${API_BASE}/api/errors/upload`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: newData }),
-      });
-      if (!res.ok) {
-        console.error("Upload failed", res.status, await res.text().catch(() => ""));
+      const result = await tracker.uploadErrors(newData);
+      if (!result) {
         showToast("Upload failed — your previous data is unchanged. Please try again.");
         setUploading(false);
         return;
       }
-      const result = await res.json();
 
-      setLastUpdated(result.updatedAt || new Date().toISOString());
-      setStatuses({});
-      setNotes({});
-      setFlags({});
-      setRawData(assignRowKeys(newData));
-      setSelectedCenter("All Centers");
-      setSelectedCategory("All Types");
       setShowUpload(false);
       setPasswordOk(false);
       setUploadPassword("");
@@ -787,129 +115,8 @@ export default function App() {
     setUploading(false);
   };
 
-  // ── Shared state write helper (FastAPI, was SheetDB) ────────────────────────
-  // Upserts {status, note, flag} for a single row key via the backend.
-  const _writeErrorState = useCallback(async (key, status, note, flag) => {
-    const res = await fetch(`${API_BASE}/api/errors/state`, {
-      method: "PUT",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key, status, note, flag: Boolean(flag) }),
-    });
-    if (!res.ok) throw new Error(`state save failed: ${res.status}`);
-  }, []);
-
-  // ── Race-safe save executor ──────────────────────────────────────────────────
-  // Runs the write for `key`. If another save for the same key arrives while
-  // this one is in-flight, it lands in savePending and is picked up automatically
-  // when this write completes — no two writes ever race for the same key.
-  const _flushSave = useCallback(async (key, statusVal, noteVal, flagVal) => {
-    if (saveInFlight.current[key]) {
-      // A write is already running — store latest values and bail.
-      savePending.current[key] = { status: statusVal, note: noteVal, flag: flagVal };
-      return;
-    }
-    saveInFlight.current[key] = true;
-    setSaving(true);
-    try {
-      await _writeErrorState(key, statusVal, noteVal, flagVal);
-      // If another value arrived while we were writing, flush it now.
-      if (savePending.current[key]) {
-        const next = savePending.current[key];
-        delete savePending.current[key];
-        // Run inline (still inside the in-flight lock) to preserve ordering.
-        await _writeErrorState(key, next.status, next.note, next.flag);
-      }
-    } catch {
-      showToast("Save failed");
-    } finally {
-      delete saveInFlight.current[key];
-      setSaving(false);
-    }
-  }, [_writeErrorState]);
-
-  const saveStatus = useCallback(async (key, value) => {
-    const currentNote = notes[key] || "";
-    const currentFlag = flags[key] ?? false;
-    setStatuses(prev => ({ ...prev, [key]: value }));
-    setSaving(true);
-    await _flushSave(key, value, currentNote, currentFlag);
-    showToast("Saved");
-  }, [notes, flags, _flushSave]);
-
-  const saveNote = useCallback(async (key, value) => {
-    const currentStatus = statuses[key] || "open";
-    const currentFlag   = flags[key] ?? false;
-    setNotes(prev => ({ ...prev, [key]: value }));
-    await _flushSave(key, currentStatus, value, currentFlag);
-    showToast("Note saved");
-  }, [statuses, flags, _flushSave]);
-
-  const saveFlag = useCallback(async (key) => {
-    const newFlag       = !(flags[key] ?? false);
-    const currentStatus = statuses[key] || "open";
-    const currentNote   = notes[key] || "";
-    setFlags(prev => ({ ...prev, [key]: newFlag }));
-    await _flushSave(key, currentStatus, currentNote, newFlag);
-  }, [flags, statuses, notes, _flushSave]);
-
-  const handleSort = (field) => {
-    if (sortField === field) {
-      setSortDir(d => d === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortDir("asc");
-    }
-  };
-
-  const effStatus = (key) => statuses[key] ?? "open";
-  const effFlag = (key) => flags[key] ?? false;
-
-  const filtered = activeData.filter(row => {
-    const locMatch = selectedCenter === "All Centers" || centerName(row.location) === selectedCenter;
-    const catMatch = selectedCategory === "All Types" || row.category === selectedCategory;
-    const weekMatch = trackerView === "week" || selectedWeek === "All Weeks" || row.week === selectedWeek;
-    return locMatch && catMatch && weekMatch;
-  }).sort((a, b) => {
-    const aResolved = effStatus(a._key) !== "open";
-    const bResolved = effStatus(b._key) !== "open";
-    if (aResolved !== bResolved) return aResolved ? 1 : -1;
-    if (!sortField) return 0;
-    let aVal = a[sortField], bVal = b[sortField];
-    const cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
-    return sortDir === "asc" ? cmp : -cmp;
-  });
-
-  const stats = {
-    total: filtered.length,
-    fixed: filtered.filter(r => effStatus(r._key) === "fixed").length,
-    disputed: filtered.filter(r => effStatus(r._key) === "disputed").length,
-    open: filtered.filter(r => effStatus(r._key) === "open").length,
-  };
-
-  const centerStats = useMemo(() => {
-    return CENTERS.map(center => {
-      const rows = rawData.filter(r => centerName(r.location) === center);
-      const total = rows.length;
-      const resolved = rows.filter(r => {
-        const s = statuses[makeKey(r, rawData.indexOf(r))] ?? "open";
-        return s === "fixed" || s === "disputed";
-      }).length;
-      const pct = total > 0 ? Math.round((resolved / total) * 100) : 100;
-      return { center, total, resolved, pct, noErrors: total === 0 };
-    });
-  }, [rawData, statuses]);
-
-  const formatDate = (d) => {
-    if (!d) return "";
-    const parts = d.split("-");
-    if (parts.length === 3 && parts[0].length === 4) return `${parts[1]}/${parts[2]}/${parts[0]}`;
-    return d;
-  };
-
-
   // Still checking session — show nothing to avoid flash of login screen
-  if (isAuthenticated === null) {
+  if (auth.isAuthenticated === null) {
     return (
       <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0f172a 0%, #1a3a6b 55%, #0f172a 100%)", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 14 }}>Loading…</div>
@@ -917,34 +124,34 @@ export default function App() {
     );
   }
 
-  if (!isAuthenticated) {
+  if (!auth.isAuthenticated) {
     return (
       <LoginScreen
         LOGO={LOGO}
-        showRegister={showRegister}
-        setShowRegister={v => { setShowRegister(v); setLoginError(""); setRegError(""); if (!v) { setRegInviteCode(""); setRegUsername(""); setRegPassword(""); setRegConfirm(""); } }}
-        loginUsername={loginUsername} setLoginUsername={v => { setLoginUsername(v); setLoginError(""); }}
-        loginPassword={loginPassword} setLoginPassword={v => { setLoginPassword(v); setLoginError(""); }}
-        loginError={loginError}
-        onLogin={handleLogin}
-        regInviteCode={regInviteCode} setRegInviteCode={v => { setRegInviteCode(v); setRegError(""); }}
-        regCenter={regCenter} setRegCenter={v => { setRegCenter(v); setRegError(""); }}
-        regUsername={regUsername} setRegUsername={v => { setRegUsername(v); setRegError(""); }}
-        regPassword={regPassword} setRegPassword={v => { setRegPassword(v); setRegError(""); }}
-        regConfirm={regConfirm} setRegConfirm={v => { setRegConfirm(v); setRegError(""); }}
-        regError={regError}
-        regLoading={regLoading}
-        onRegister={handleRegister}
+        showRegister={auth.showRegister}
+        setShowRegister={v => { auth.setShowRegister(v); auth.setLoginError(""); auth.setRegError(""); if (!v) { auth.setRegInviteCode(""); auth.setRegUsername(""); auth.setRegPassword(""); auth.setRegConfirm(""); } }}
+        loginUsername={auth.loginUsername} setLoginUsername={v => { auth.setLoginUsername(v); auth.setLoginError(""); }}
+        loginPassword={auth.loginPassword} setLoginPassword={v => { auth.setLoginPassword(v); auth.setLoginError(""); }}
+        loginError={auth.loginError}
+        onLogin={auth.handleLogin}
+        regInviteCode={auth.regInviteCode} setRegInviteCode={v => { auth.setRegInviteCode(v); auth.setRegError(""); }}
+        regCenter={auth.regCenter} setRegCenter={v => { auth.setRegCenter(v); auth.setRegError(""); }}
+        regUsername={auth.regUsername} setRegUsername={v => { auth.setRegUsername(v); auth.setRegError(""); }}
+        regPassword={auth.regPassword} setRegPassword={v => { auth.setRegPassword(v); auth.setRegError(""); }}
+        regConfirm={auth.regConfirm} setRegConfirm={v => { auth.setRegConfirm(v); auth.setRegError(""); }}
+        regError={auth.regError}
+        regLoading={auth.regLoading}
+        onRegister={auth.handleRegister}
       />
     );
   }
 
-  const MODULE_IDS = MODULES.map(m => m.id);
+  const { userRole, userPermissions } = auth;
 
-  // Manager role can only access the tracker module. Any other module tab
-  // shows the Under Construction placeholder. Workspace tabs (faq, modules,
-  // announcements, reports) remain accessible so sidebar nav still works.
-  // A module is accessible if: user is admin, OR their permissions explicitly allow it.
+  // A module is accessible if: user is admin, OR their permissions explicitly
+  // allow it. Any other module tab shows the Under Construction placeholder.
+  // Workspace tabs (faq, modules, announcements, reports) remain accessible
+  // so sidebar nav still works.
   const canAccessModule = (moduleId) => {
     if (userRole === "admin") return true;
     return userPermissions[moduleId] === true;
@@ -956,149 +163,22 @@ export default function App() {
   const underConstructionModuleName =
     (MODULES.find(m => m.id === activeTab) || {}).name || "This module";
 
-  const sidebarActive = (tab) => {
-    if (tab === "modules") return MODULE_IDS.includes(activeTab) || activeTab === "modules";
-    if (tab === "faq") return activeTab === "faq";
-    return activeTab === tab;
-  };
-  const PAGE_LABEL = { home: "Home", modules: "Modules", tracker: "Billing Error Detection", billing: "Billing Overview", calculator: "Saturday Calculator", fleet: "Fleet Dashboard", utilization: "Utilization Tracker", faq: "Help Center", announcements: "Announcements", reports: "Reports" };
-  const breadcrumbs = () => {
-    if (activeTab === "home") return [{ label: "Home" }];
-    if (activeTab === "modules") return [{ label: "Home", tab: "home" }, { label: "Modules" }];
-    if (MODULE_IDS.includes(activeTab)) return [{ label: "Home", tab: "home" }, { label: "Modules", tab: "modules" }, { label: PAGE_LABEL[activeTab] || activeTab }];
-    return [{ label: "Home", tab: "home" }, { label: PAGE_LABEL[activeTab] || activeTab }];
-  };
-
   return (
     <div style={{ fontFamily: "'DM Sans', system-ui, sans-serif", background: "var(--bg)", minHeight: "100vh", color: "var(--text-1)", display: "flex" }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
-        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap');
-        *, *::before, *::after { box-sizing: border-box; }
-        body { margin: 0; }
-        :root {
-          --bg: #ffffff;
-          --bg-soft: #f7f7f5;
-          --bg-hover: #f1f1ef;
-          --border: #e9e9e7;
-          --text-1: #1a1a1a;
-          --text-2: #6b6b6b;
-          --text-3: #9b9a97;
-          --accent: #2383e2;
-          --accent-soft: #e8f1fc;
-          --navy: #1a2d4d;
-          --steel: #4a7ab5;
-          --powder: #8fb3d4;
-          --light: #d6e8f5;
-          --muted: #6b6b6b;
-          --sidebar-w: 220px;
-          --topbar-h: 52px;
-        }
-        select:focus, button:focus, input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
-        .error-row:hover { background: var(--bg-hover) !important; }
-        .status-btn { cursor: pointer; border: 1px solid; border-radius: 4px; padding: 3px 10px; font-size: 12px; font-weight: 500; transition: opacity 0.1s; white-space: nowrap; font-family: inherit; }
-        .status-btn:hover { opacity: 0.8; }
-        .status-btn.active { box-shadow: 0 0 0 2px var(--accent); }
-        .faq-a { display: none; }
-        .faq-a.open { display: block; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-        .page-anim { animation: fadeIn 0.15s ease; }
-        .back-btn:hover { background: var(--bg-soft) !important; border-color: var(--border) !important; }
-        .nav-item { display: block; width: 100%; text-align: left; border: none; border-radius: 6px; padding: 8px 12px; margin-bottom: 1px; font-size: 13px; font-family: inherit; cursor: pointer; transition: background 0.1s, color 0.1s; background: none; color: rgba(255,255,255,0.65); font-weight: 400; }
-        .nav-item:hover { background: rgba(255,255,255,0.08); color: #fff; }
-        .nav-item.active { background: rgba(255,255,255,0.14); color: #fff; font-weight: 600; }
-        .mod-card { border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px; background: var(--bg); position: relative; cursor: pointer; transition: box-shadow 0.15s, border-color 0.15s; }
-        .mod-card:hover { box-shadow: 0 2px 14px rgba(26,45,77,0.1); border-color: var(--powder); }
-        .mod-card.locked { cursor: default; opacity: 0.75; }
-        .mod-card.locked:hover { box-shadow: none; border-color: var(--border); }
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #d4d4d2; border-radius: 3px; }
-      `}</style>
+      <GlobalStyles />
 
       {/* LEFT SIDEBAR */}
-      <nav style={{ width: "var(--sidebar-w)", flexShrink: 0, background: "var(--navy)", minHeight: "100vh", display: "flex", flexDirection: "column", position: "sticky", top: 0, height: "100vh", overflowY: "auto" }}>
-
-        {/* Brand */}
-        <button onClick={() => setActiveTab("home")} style={{ display: "flex", alignItems: "center", gap: 10, background: "none", border: "none", cursor: "pointer", padding: "18px 16px 16px", width: "100%", textAlign: "left", borderBottom: "1px solid rgba(255,255,255,0.1)", flexShrink: 0 }}>
-          <div style={{ width: 30, height: 30, borderRadius: 7, background: "rgba(255,255,255,0.12)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
-            <img src={LOGO} alt="ECS" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
-          </div>
-          <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", letterSpacing: "-0.2px", lineHeight: 1.2 }}>Empowered IS</span>
-        </button>
-
-        {/* Nav items */}
-        <div style={{ flex: 1, padding: "12px 8px", overflowY: "auto" }}>
-          <button className={`nav-item${sidebarActive("home") ? " active" : ""}`} onClick={() => setActiveTab("home")}>Home</button>
-          <button className={`nav-item${sidebarActive("modules") ? " active" : ""}`} onClick={() => setActiveTab("modules")}>Modules</button>
-
-          <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.8px", color: "rgba(255,255,255,0.3)", padding: "16px 12px 6px" }}>Workspace</div>
-          <button className={`nav-item${sidebarActive("announcements") ? " active" : ""}`} onClick={() => setActiveTab("announcements")}>Announcements</button>
-          <button className={`nav-item${sidebarActive("faq") ? " active" : ""}`} onClick={() => setActiveTab("faq")}>Help Center</button>
-          <button className={`nav-item${sidebarActive("reports") ? " active" : ""}`} onClick={() => setActiveTab("reports")}>Reports</button>
-          <button className={`nav-item${sidebarActive("ops-command") ? " active" : ""}`} onClick={() => setActiveTab("ops-command")}>Operations Command Center</button>
-
-          {userRole === "admin" && (
-            <>
-              <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.8px", color: "rgba(255,255,255,0.3)", padding: "16px 12px 6px" }}>Admin</div>
-              <button className={`nav-item${sidebarActive("admin-panel") ? " active" : ""}`} onClick={() => setActiveTab("admin-panel")}>Admin Panel</button>
-            </>
-          )}
-        </div>
-
-        {/* User card */}
-        <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", padding: "14px 16px", flexShrink: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 32, height: 32, borderRadius: "50%", background: "var(--steel)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>{userRole === "admin" ? "A" : "M"}</span>
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: "#fff", lineHeight: 1.2 }}>{userRole === "admin" ? "Admin" : "Manager"}</div>
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", lineHeight: 1.3, marginTop: 1 }}>ECS Staff</div>
-            </div>
-            <button onClick={handleLogout} title="Log out" style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)", fontSize: 16, padding: 4, lineHeight: 1, display: "flex", alignItems: "center" }}
-              onMouseOver={e => e.currentTarget.style.color = "#fff"} onMouseOut={e => e.currentTarget.style.color = "rgba(255,255,255,0.45)"}>
-              &#x2192;
-            </button>
-          </div>
-        </div>
-
-      </nav>
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} userRole={userRole} onLogout={auth.handleLogout} />
 
       {/* RIGHT COLUMN */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: "100vh" }}>
 
         {/* TOP BAR */}
-        <header style={{ height: "var(--topbar-h)", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px", background: "var(--bg)", position: "sticky", top: 0, zIndex: 100, flexShrink: 0 }}>
-          {/* Breadcrumbs */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, minWidth: 0 }}>
-            {breadcrumbs().map((crumb, i) => (
-              <React.Fragment key={i}>
-                {i > 0 && <span style={{ color: "var(--text-3)", fontSize: 12 }}>/</span>}
-                {crumb.tab ? (
-                  <button onClick={() => setActiveTab(crumb.tab)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 13, color: "var(--text-3)", fontFamily: "inherit" }}
-                    onMouseOver={e => e.currentTarget.style.color = "var(--text-1)"} onMouseOut={e => e.currentTarget.style.color = "var(--text-3)"}>
-                    {crumb.label}
-                  </button>
-                ) : (
-                  <span style={{ color: "var(--text-1)", fontWeight: 500 }}>{crumb.label}</span>
-                )}
-              </React.Fragment>
-            ))}
-          </div>
-          {/* Right side: saving indicator + search shell */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-            {saving && <span style={{ fontSize: 12, color: "var(--text-3)" }}>Saving…</span>}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--bg-soft)", border: "1px solid var(--border)", borderRadius: 7, padding: "6px 12px" }}>
-              <span style={{ fontSize: 12, color: "var(--text-3)" }}>&#x2315;</span>
-              <input placeholder="Search…" style={{ background: "none", border: "none", outline: "none", fontSize: 13, color: "var(--text-1)", fontFamily: "inherit", width: 160 }} />
-            </div>
-          </div>
-        </header>
+        <TopBar activeTab={activeTab} setActiveTab={setActiveTab} saving={tracker.saving} />
 
       <main style={{ flex: 1, minWidth: 0 }}>
 
-      {/* SheetDB health-check banner */}
+      {/* Backend health-check banner */}
       {sheetDbBannerVisible && (
         <div style={{
           background: "#fef9c3",
@@ -1162,7 +242,7 @@ export default function App() {
             </button>
           </div>
           <div style={{ position: "relative" }}>
-            <HomeDashboard rawData={rawData} statuses={statuses} onNavigate={setActiveTab} />
+            <HomeDashboard rawData={tracker.rawData} statuses={tracker.statuses} onNavigate={setActiveTab} />
             {userRole !== "admin" && (
               <div style={{ position: "absolute", inset: 0, background: "rgba(255,255,255,0.82)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", zIndex: 20, minHeight: 300 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", color: "var(--steel)", marginBottom: 10 }}>Coming Soon</div>
@@ -1176,138 +256,16 @@ export default function App() {
 
       {/* MODULES PAGE */}
       {activeTab === "modules" && (
-        <div className="page-anim" style={{ padding: "40px 44px" }}>
-          <p style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.7px", color: "var(--text-3)", margin: "0 0 8px" }}>Platform</p>
-          <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-1)", letterSpacing: "-0.4px", margin: "0 0 6px", lineHeight: 1.2 }}>Modules</h1>
-          <p style={{ fontSize: 14, color: "var(--text-2)", margin: "0 0 32px", lineHeight: 1.5 }}>Tools and dashboards available to your team.</p>
-          {[...MODULE_CATEGORIES, "Other"].map(cat => {
-            const mods = MODULES.filter(
-              m => (MODULE_CATEGORIES.includes(m.category) ? m.category : "Other") === cat
-            );
-            if (!mods.length) return null;
-            return (
-              <div key={cat} style={{ marginBottom: 28 }}>
-                <p style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.7px", color: "var(--text-3)", margin: "0 0 12px", paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>{cat}</p>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
-                  {mods.map(m => {
-                    const canAccess = canAccessModule(m.id);
-                    return (
-                    <div key={m.id}
-                      className={`mod-card${canAccess ? "" : " locked"}`}
-                      onClick={() => canAccess && setActiveTab(m.id)}
-                    >
-                      {canAccess ? (
-                        <span style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", background: "#dcfce7", color: "#166534", padding: "3px 8px", borderRadius: 4 }}>Active</span>
-                      ) : (
-                        <span style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", background: "var(--bg-soft)", color: "var(--text-3)", padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border)" }}>Locked</span>
-                      )}
-                      <div style={{ width: 36, height: 36, borderRadius: 8, background: canAccess ? "var(--navy)" : "var(--bg-soft)", marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                        <div style={{ width: 14, height: 14, borderRadius: 3, background: canAccess ? "rgba(143,179,212,0.7)" : "var(--border)" }} />
-                      </div>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-1)", marginBottom: 5 }}>{m.name}</div>
-                      <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>{m.description}</div>
-                      {canAccess && (
-                        <div style={{ marginTop: 16, fontSize: 12, fontWeight: 700, color: "var(--navy)", letterSpacing: "-0.1px" }}>Open &rarr;</div>
-                      )}
-                    </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <ModulesPage canAccessModule={canAccessModule} onOpenModule={setActiveTab} />
       )}
 
-      {/* ANNOUNCEMENTS PAGE */}
-      {activeTab === "announcements" && (
-        <div className="page-anim" style={{ padding: "52px 44px", maxWidth: 640 }}>
-          <p style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.7px", color: "var(--text-3)", margin: "0 0 8px" }}>Workspace</p>
-          <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-1)", letterSpacing: "-0.4px", margin: "0 0 6px" }}>Announcements</h1>
-          <p style={{ fontSize: 14, color: "var(--text-2)", margin: "0 0 32px" }}>Team updates and notices will appear here.</p>
-          <div style={{ background: "var(--bg-soft)", border: "1px solid var(--border)", borderRadius: 10, padding: "24px", textAlign: "center" }}>
-            <div style={{ fontSize: 13, color: "var(--text-3)" }}>No announcements yet.</div>
-          </div>
-        </div>
-      )}
-
-      {/* REPORTS PAGE */}
-      {activeTab === "reports" && (
-        <div className="page-anim" style={{ padding: "52px 44px", maxWidth: 640 }}>
-          <p style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.7px", color: "var(--text-3)", margin: "0 0 8px" }}>Workspace</p>
-          <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-1)", letterSpacing: "-0.4px", margin: "0 0 6px" }}>Reports</h1>
-          <p style={{ fontSize: 14, color: "var(--text-2)", margin: "0 0 32px" }}>Scheduled and on-demand reports will be available here.</p>
-          <div style={{ background: "var(--bg-soft)", border: "1px solid var(--border)", borderRadius: 10, padding: "24px", textAlign: "center" }}>
-            <div style={{ fontSize: 13, color: "var(--text-3)" }}>Coming soon.</div>
-          </div>
-        </div>
-      )}
-
-      {/* OPERATIONS COMMAND CENTER PAGE */}
-      {activeTab === "ops-command" && (
-        <div className="page-anim" style={{ padding: "52px 44px", maxWidth: 640 }}>
-          <p style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.7px", color: "var(--text-3)", margin: "0 0 8px" }}>Workspace</p>
-          <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-1)", letterSpacing: "-0.4px", margin: "0 0 6px" }}>Operations Command Center</h1>
-          <p style={{ fontSize: 14, color: "var(--text-2)", margin: "0 0 32px" }}>Live operational data and reporting managed by the operations team. Access requires a Google account associated with ECS.</p>
-          <a
-            href="https://script.google.com/macros/s/AKfycbwqijyJOT4DDTX1VQ3FkP-eKltx1DIThL09QNL-IbK2glP25BNsIr26mR3ARHa5JUwkyg/exec"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "var(--navy)", color: "#fff", borderRadius: 8, padding: "12px 22px", fontSize: 14, fontWeight: 600, textDecoration: "none", letterSpacing: "-0.1px" }}
-            onMouseOver={e => e.currentTarget.style.opacity = "0.85"}
-            onMouseOut={e => e.currentTarget.style.opacity = "1"}
-          >
-            <span style={{ fontSize: 16 }}>&#x2197;</span>
-            Open Operations Command Center
-          </a>
-          <p style={{ fontSize: 12, color: "var(--text-3)", marginTop: 16 }}>Opens in a new tab. Sign in with your ECS Google account if prompted.</p>
-        </div>
-      )}
+      {/* WORKSPACE PAGES */}
+      {activeTab === "announcements" && <AnnouncementsPage />}
+      {activeTab === "reports" && <ReportsPage />}
+      {activeTab === "ops-command" && <OpsCommandPage />}
 
       {/* FAQ PAGE */}
-      {activeTab === "faq" && (
-        <div className="page-anim" style={{ maxWidth: 720, margin: "0 auto", padding: "40px 32px" }}>
-          <div style={{ marginBottom: 36 }}>
-            <div style={{ fontSize: 26, fontWeight: 800, color: "var(--navy)", letterSpacing: "-0.5px", marginBottom: 6 }}>Help & FAQ</div>
-            <div style={{ fontSize: 14, color: "var(--muted)" }}>Everything you need to know about using ECS Hub.</div>
-          </div>
-
-          {[
-            { section: "Home Dashboard", items: [
-              { q: "What does the Home page show?", a: (<ul style={{ paddingLeft: 18, marginTop: 6 }}><li style={{ marginBottom: 4 }}>The Home page is your billing-error command center — it's the first thing you see when you sign in.</li><li style={{ marginBottom: 4 }}>The four cards at the top show <strong>Open Billing Errors</strong>, errors logged <strong>This Week</strong> and <strong>This Month</strong>, and your overall <strong>Resolution Rate</strong>. Click any card to jump straight into the Error Tracker.</li><li style={{ marginBottom: 4 }}>Below the cards, the <strong>Billing Error Summary</strong> shows resolution progress plus a breakdown of errors by <strong>Center</strong> and by <strong>Type</strong>.</li></ul>) },
-            ]},
-            { section: "Error Tracker", items: [
-              { q: "What do the error statuses mean?", a: (<ul style={{ paddingLeft: 18, marginTop: 6 }}><li style={{ marginBottom: 4 }}><strong>Open</strong> — Not yet reviewed. Default for all new errors.</li><li style={{ marginBottom: 4 }}><strong>Not an Error</strong> — Reviewed and found to be a dispute or not applicable (shown as “Disputed” in the counts).</li><li style={{ marginBottom: 4 }}><strong>Fixed</strong> — Resolved and corrected.</li></ul>) },
-            ]},
-            { section: "Saturday Calculator", items: [
-              { q: "How do I use the Saturday Calculator?", a: (<ul style={{ paddingLeft: 18, marginTop: 6 }}><li style={{ marginBottom: 4 }}>Select your center — rates load automatically.</li><li style={{ marginBottom: 4 }}>Enter A, B, C, and C+ acuity client counts.</li><li style={{ marginBottom: 4 }}>Minimum required staff calculates automatically.</li><li style={{ marginBottom: 4 }}>Add extra staff if needed. Salary staff count toward ratio but not cost.</li><li style={{ marginBottom: 4 }}>Result shows ✅ Good to Go or ❌ Not Viable.</li></ul>) },
-              { q: "What are the acuity staff ratios?", a: (<ul style={{ paddingLeft: 18, marginTop: 6 }}><li style={{ marginBottom: 4 }}><strong>A Acuity</strong> — 1 staff per 10 clients</li><li style={{ marginBottom: 4 }}><strong>B Acuity</strong> — 1 staff per 6 clients</li><li style={{ marginBottom: 4 }}><strong>C Acuity</strong> — 1 staff per 3 clients</li><li style={{ marginBottom: 4 }}><strong>C+ Acuity</strong> — 1:1 ratio · same rate as C</li></ul>) },
-            ]},
-            { section: "Reporting Issues", items: [
-              { q: "How do I report a bug or request a feature?", a: "Reach out directly to the platform administrator. Please include a description of what happened, which page you were on, and what you expected to happen." },
-            ]},
-          ].map(({ section, items }) => (
-            <div key={section} style={{ marginBottom: 36 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--steel)", textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 12, paddingBottom: 8, borderBottom: "1.5px solid var(--border)" }}>{section}</div>
-              {items.map(({ q, a }) => (
-                <FaqItem key={q} question={q} answer={a} />
-              ))}
-            </div>
-          ))}
-
-          {/* Contact */}
-          <div style={{ marginBottom: 36 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>Contact</div>
-            <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "18px 22px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-1)", marginBottom: 2 }}>Brock</div>
-                <div style={{ fontSize: 12, color: "var(--text-2)" }}>Platform Administrator · Empowered IS</div>
-              </div>
-              <span style={{ fontSize: 12, color: "var(--text-3)" }}>Questions? Reach out</span>
-            </div>
-          </div>
-        </div>
-      )}
+      {activeTab === "faq" && <HelpCenter />}
 
       {/* Sub-page bar: unified back button for all module screens.
           Hidden when UnderConstruction is rendering — UC has its own back button. */}
@@ -1327,7 +285,7 @@ export default function App() {
           )}
           {activeTab === "tracker" && (
             <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-              {!loaded && <span style={{ fontSize: 12, color: "var(--text-3)" }}>Loading…</span>}
+              {!tracker.loaded && <span style={{ fontSize: 12, color: "var(--text-3)" }}>Loading…</span>}
               <button
                 onClick={() => { setShowUpload(true); setPasswordOk(false); setUploadPassword(""); setPasswordError(false); }}
                 style={{ background: "var(--text-1)", color: "white", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}
@@ -1335,11 +293,11 @@ export default function App() {
                 Upload New Week
               </button>
               <div style={{ background: "var(--bg-soft)", border: "1px solid var(--border)", borderRadius: 6, padding: "4px 10px", fontSize: 12, color: "var(--text-2)" }}>
-                {stats.open} open · {stats.fixed} fixed
+                {tracker.stats.open} open · {tracker.stats.fixed} fixed
               </div>
-              {lastUpdated && (
+              {tracker.lastUpdated && (
                 <div style={{ fontSize: 11, color: "var(--text-3)" }}>
-                  Updated {new Date(lastUpdated).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                  Updated {new Date(tracker.lastUpdated).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                 </div>
               )}
             </div>
@@ -1347,9 +305,8 @@ export default function App() {
         </div>
       )}
 
-      {/* Under Construction placeholder — manager role on any non-tracker module.
-          Renders in place of the actual module content. Per spec, includes its
-          own back button to Home. */}
+      {/* Under Construction placeholder — manager role on any non-permitted module.
+          Renders in place of the actual module content. */}
       {showUnderConstruction && (
         <UnderConstruction
           moduleName={underConstructionModuleName}
@@ -1365,222 +322,22 @@ export default function App() {
         </ErrorBoundary>
       )}
 
-      {activeTab === "tracker" && !showUnderConstruction && <ErrorBoundary moduleName="Error Tracker"><div style={{ padding: "24px 32px" }}>
-        {/* View switcher: This Week / Backlog / Carryover. Admin-only preview
-            for now (the history endpoint is also admin-gated server-side);
-            drop the role check here when managers should see it. */}
-        {userRole === "admin" && history.length > 0 && (
-          <div style={{ display: "inline-flex", background: "#f1f5f9", borderRadius: 10, padding: 3, marginBottom: 18, border: "1.5px solid #e2e8f0" }}>
-            {[
-              { id: "week", label: "This Week", count: rawData.length },
-              { id: "backlog", label: "Backlog 2026", count: history.length },
-              { id: "carryover", label: "Carryover", count: carryoverRows.length },
-            ].map(v => {
-              const active = trackerView === v.id;
-              const alert = v.id === "carryover" && v.count > 0;
-              return (
-                <button key={v.id} onClick={() => { setTrackerView(v.id); setSelectedWeek("All Weeks"); }}
-                  style={{ border: "none", cursor: "pointer", fontFamily: "inherit", borderRadius: 8,
-                    padding: "7px 16px", fontSize: 13, fontWeight: 600, transition: "all 0.15s",
-                    background: active ? "white" : "transparent",
-                    color: active ? "var(--navy, #1a2d4d)" : "#64748b",
-                    boxShadow: active ? "0 1px 3px rgba(0,0,0,0.12)" : "none" }}>
-                  {v.label}
-                  <span style={{ marginLeft: 7, fontSize: 11, fontWeight: 700, borderRadius: 20, padding: "1px 7px",
-                    background: alert ? "#fee2e2" : active ? "#eef2f7" : "#e2e8f0",
-                    color: alert ? "#b91c1c" : "#64748b" }}>
-                    {v.count}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Explainer line for the history views */}
-        {trackerView !== "week" && (
-          <div style={{ fontSize: 13, color: "#64748b", marginBottom: 16, lineHeight: 1.5 }}>
-            {trackerView === "backlog"
-              ? "Every error uploaded in 2026, across all weeks. Statuses are shared with the weekly view — fixing it here fixes it everywhere."
-              : "Errors whose week ended (the Mon–Wed pipeline runs finished) without being marked Fixed or Not an Error. This is the catch-up list."}
-          </div>
-        )}
-
-        {/* Center Progress Bar Row — weekly progress, so weekly view only */}
-        {trackerView === "week" && centerStats.length > 0 && (
-          <div style={{ display: "flex", gap: 8, marginBottom: 20, overflowX: "auto", paddingBottom: 4 }}>
-            {centerStats.map(({ center, total, resolved, pct, noErrors }) => {
-              const color = progressColor(pct);
-              const isActive = selectedCenter === center;
-              return (
-                <div key={center} onClick={() => setSelectedCenter(isActive ? "All Centers" : center)}
-                  style={{ flex: "0 0 auto", cursor: "pointer", background: "white", border: `1.5px solid ${isActive ? color : "#e2e8f0"}`,
-                    borderRadius: 8, padding: "6px 10px", minWidth: 90, boxShadow: isActive ? `0 0 0 2px ${color}40` : "none",
-                    transition: "all 0.15s" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#374151", marginBottom: 4, whiteSpace: "nowrap" }}>{center}</div>
-                  <div style={{ background: "#f1f5f9", borderRadius: 100, height: 5, overflow: "hidden", marginBottom: 3 }}>
-                    <div style={{ height: "100%", borderRadius: 100, width: `${pct}%`, background: color, transition: "width 0.4s ease" }} />
-                  </div>
-                  <div style={{ fontSize: 10, color: noErrors ? "#16a34a" : "#94a3b8", fontWeight: noErrors ? 600 : 400, whiteSpace: "nowrap" }}>
-                    {noErrors ? "✓ No Errors" : `${resolved}/${total} · ${pct}%`}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Filters */}
-        <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
-          {trackerView !== "week" && (
-            <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.5px" }}>Week</label>
-              <select value={selectedWeek} onChange={e => setSelectedWeek(e.target.value)}
-                style={{ border: "1.5px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", fontSize: 14, background: "white", color: "#1e293b", cursor: "pointer", minWidth: 140 }}>
-                {weeks.map(w => <option key={w}>{w}</option>)}
-              </select>
-            </div>
-          )}
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.5px" }}>Center</label>
-            <select value={selectedCenter} onChange={e => setSelectedCenter(e.target.value)}
-              style={{ border: "1.5px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", fontSize: 14, background: "white", color: "#1e293b", cursor: "pointer", minWidth: 200 }}>
-              {locations.map(l => <option key={l}>{l}</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.5px" }}>Error Type</label>
-            <select value={selectedCategory} onChange={e => setSelectedCategory(e.target.value)}
-              style={{ border: "1.5px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", fontSize: 14, background: "white", color: "#1e293b", cursor: "pointer", minWidth: 220 }}>
-              {categories.map(c => <option key={c}>{c}</option>)}
-            </select>
-          </div>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            {[
-              { label: "Open", val: stats.open, color: "#6b7280", bg: "#f3f4f6" },
-              { label: "Disputed", val: stats.disputed, color: "#dc2626", bg: "#fee2e2" },
-              { label: "Fixed", val: stats.fixed, color: "#16a34a", bg: "#dcfce7" },
-            ].map(s => (
-              <div key={s.label} style={{ background: s.bg, border: `1.5px solid ${s.color}30`, borderRadius: 8, padding: "6px 14px", textAlign: "center" }}>
-                <div style={{ fontSize: 20, fontWeight: 700, color: s.color, fontFamily: "'DM Mono', monospace" }}>{s.val}</div>
-                <div style={{ fontSize: 11, color: s.color, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>{s.label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Table */}
-        <div style={{ background: "white", borderRadius: 12, border: "1.5px solid #e2e8f0", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
-          <div style={{ padding: "14px 20px", borderBottom: "1.5px solid #e2e8f0", background: "#f8fafc", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ fontSize: 14, fontWeight: 600, color: "#374151" }}>{filtered.length} errors</span>
-            <span style={{ fontSize: 12, color: "#94a3b8" }}>
-              {selectedCenter !== "All Centers" ? selectedCenter : "All Centers"}{selectedCategory !== "All Types" ? ` · ${selectedCategory}` : ""}
-            </span>
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: "#f8fafc" }}>
-                  {[
-                    ...(trackerView !== "week" ? [{ label: "Week", field: "week" }] : []),
-                    { label: "Client Name", field: "name" },
-                    { label: "Center", field: null },
-                    { label: "Date", field: "date" },
-                    { label: "Error", field: null },
-                    { label: "Type", field: null },
-                    { label: "Status", field: null },
-                    { label: "Notes", field: null },
-                  ].map(({ label, field }) => (
-                    <th key={label} onClick={() => field && handleSort(field)}
-                      style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 700,
-                        color: sortField === field ? "#3b82f6" : "#64748b", textTransform: "uppercase",
-                        letterSpacing: "0.5px", borderBottom: "1.5px solid #e2e8f0", whiteSpace: "nowrap",
-                        cursor: field ? "pointer" : "default", userSelect: "none",
-                        position: "sticky", top: 0, background: "#f8fafc", zIndex: 1 }}>
-                      {label}
-                      {field && <span style={{ marginLeft: 5, fontSize: 10, opacity: sortField === field ? 1 : 0.35 }}>
-                        {sortField === field ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}
-                      </span>}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((row, i) => {
-                  const key = row._key ?? makeKey(row, i);
-                  const status = effStatus(key);
-                  const note = notes[key] ?? "";
-                  const flagged = effFlag(key);
-                  const catStyle = CATEGORY_COLORS[row.category] || { bg: "#f9fafb", text: "#374151", border: "#e5e7eb" };
-                  const rowBg = status === "fixed" ? "#f0fdf4" : status === "disputed" ? "#fff8f8" : "white";
-                  return (
-                    <tr key={key + i} className="error-row" style={{ borderBottom: "1px solid #f1f5f9", background: rowBg,
-                      transition: "background 0.1s" }}>
-                      {trackerView !== "week" && (
-                        <td style={{ padding: "10px 16px", color: "#64748b", fontFamily: "'DM Mono', monospace", fontSize: 12, whiteSpace: "nowrap" }}>{row.week}</td>
-                      )}
-                      <td style={{ padding: "10px 16px", fontWeight: 500, color: "#1e293b", whiteSpace: "nowrap" }}>{row.name}</td>
-                      <td style={{ padding: "10px 16px", color: "#475569", whiteSpace: "nowrap" }}>{centerName(row.location)}</td>
-                      <td style={{ padding: "10px 16px", color: "#475569", fontFamily: "'DM Mono', monospace", fontSize: 12, whiteSpace: "nowrap" }}>{formatDate(row.date)}</td>
-                      <td style={{ padding: "10px 16px", color: "#374151", minWidth: 260, maxWidth: 400, whiteSpace: "normal", wordBreak: "break-word" }}>
-                        {row.reason}
-                      </td>
-                      <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>
-                        <span style={{ background: catStyle.bg, color: catStyle.text, border: `1px solid ${catStyle.border}`, borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 600 }}>
-                          {row.category}
-                        </span>
-                      </td>
-                      <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>
-                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
-                          {STATUS_OPTIONS.map(opt => (
-                            <button key={opt.value} className={`status-btn ${status === opt.value ? "active" : ""}`}
-                              onClick={() => saveStatus(key, opt.value)}
-                              style={{ background: status === opt.value ? opt.bg : "white", color: status === opt.value ? opt.color : "#9ca3af",
-                                borderColor: status === opt.value ? opt.border : "#e5e7eb", opacity: status === opt.value ? 1 : 0.7 }}>
-                              {opt.label}
-                            </button>
-                          ))}
-                          <button onClick={() => saveFlag(key)}
-                            title={flagged ? "Remove flag" : "Flag this row"}
-                            style={{ background: flagged ? "#fef2f2" : "white", color: flagged ? "#dc2626" : "#d1d5db",
-                              border: `1px solid ${flagged ? "#fca5a5" : "#e5e7eb"}`, borderRadius: 4,
-                              padding: "3px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer", lineHeight: 1, transition: "all 0.15s", fontFamily: "inherit" }}>
-                            {flagged ? "Flagged" : "Flag"}
-                          </button>
-                        </div>
-                      </td>
-                      <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>
-                        <button onClick={() => { setNoteModal({ key, note }); setNoteInput(note); }}
-                          style={{ background: note ? "#f0f9ff" : "#f8fafc", color: note ? "#0369a1" : "#94a3b8",
-                            border: `1px solid ${note ? "#bae6fd" : "#e2e8f0"}`, borderRadius: 6, padding: "4px 10px",
-                            fontSize: 12, cursor: "pointer", maxWidth: 180, textAlign: "left", whiteSpace: "nowrap",
-                            overflow: "hidden", textOverflow: "ellipsis", display: "block" }}
-                          title={note || "Add note"}>
-                          {note ? note : "+ Add note"}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {filtered.length === 0 && (
-                  <tr><td colSpan={trackerView === "week" ? 7 : 8} style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>
-                    {trackerView === "carryover" && selectedWeek === "All Weeks" && selectedCenter === "All Centers" && selectedCategory === "All Types"
-                      ? "Nothing carried over — every closed week's errors were resolved. 🎉"
-                      : "No errors found for this selection."}
-                  </td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div></ErrorBoundary>}
+      {activeTab === "tracker" && !showUnderConstruction && (
+        <ErrorBoundary moduleName="Error Tracker">
+          <ErrorTracker
+            tracker={tracker}
+            userRole={userRole}
+            onOpenNote={(key, note) => { setNoteModal({ key, note }); setNoteInput(note); }}
+          />
+        </ErrorBoundary>
+      )}
 
       {/* Note Modal */}
       <NoteModal
         noteModal={noteModal}
         noteInput={noteInput}
         setNoteInput={setNoteInput}
-        onSave={() => { saveNote(noteModal.key, noteInput !== undefined ? noteInput : noteModal.note); setNoteModal(null); }}
+        onSave={() => { tracker.saveNote(noteModal.key, noteInput !== undefined ? noteInput : noteModal.note); setNoteModal(null); }}
         onClose={() => setNoteModal(null)}
       />
 
