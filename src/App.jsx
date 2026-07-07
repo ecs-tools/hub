@@ -6,6 +6,7 @@ import HomeDashboard from "./components/HomeDashboard.jsx";
 import BillingDashboard from "./components/BillingDashboard.jsx";
 import ProviderReportsDashboard from "./components/ProviderReportsDashboard.jsx";
 import InvoicesDashboard from "./components/InvoicesDashboard.jsx";
+import OpsDashboard from "./components/OpsDashboard.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
 import NoteModal from "./components/NoteModal.jsx";
 import PipelineRefreshButton from "./components/PipelineRefreshButton.jsx";
@@ -313,6 +314,14 @@ export default function App() {
         <div className="page-anim">
           <ErrorBoundary moduleName="Fleet Dashboard">
             <FleetDashboard onBack={() => setActiveTab("home")} userRole={userRole} />
+          </ErrorBoundary>
+        </div>
+      )}
+
+      {activeTab === "ops" && !showUnderConstruction && (
+        <div className="page-anim">
+          <ErrorBoundary moduleName="Pipeline Health">
+            <OpsDashboard />
           </ErrorBoundary>
         </div>
       )}
