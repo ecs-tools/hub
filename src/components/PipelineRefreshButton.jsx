@@ -43,7 +43,7 @@ export default function PipelineRefreshButton({ pipeline, label, onSuccess, show
         if (latest.status !== run.status) {
           setRun(latest);
           if (latest.status === "success") {
-            showToastRef.current?.(`✅ ${label} finished — data refreshed`);
+            showToastRef.current?.(`${label} finished — data refreshed`);
             onSuccessRef.current?.();
           } else if (latest.status === "failed" || latest.status === "expired") {
             showToastRef.current?.(`${label} failed — hover the button for details`);

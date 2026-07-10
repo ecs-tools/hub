@@ -5,7 +5,8 @@ import { MODULE_IDS } from "../config/modules.js";
 // Left navigation rail.
 export default function Sidebar({ activeTab, setActiveTab, userRole, onLogout }) {
   const sidebarActive = (tab) => {
-    if (tab === "modules") return MODULE_IDS.includes(activeTab) || activeTab === "modules";
+    // Home now hosts the module launcher, so it stays lit while inside any module.
+    if (tab === "home") return activeTab === "home" || activeTab === "modules" || MODULE_IDS.includes(activeTab);
     if (tab === "faq") return activeTab === "faq";
     return activeTab === tab;
   };
@@ -23,12 +24,9 @@ export default function Sidebar({ activeTab, setActiveTab, userRole, onLogout })
         {/* Nav items */}
         <div style={{ flex: 1, padding: "12px 8px", overflowY: "auto" }}>
           <button className={`nav-item${sidebarActive("home") ? " active" : ""}`} onClick={() => setActiveTab("home")}>Home</button>
-          <button className={`nav-item${sidebarActive("modules") ? " active" : ""}`} onClick={() => setActiveTab("modules")}>Modules</button>
 
           <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.8px", color: "rgba(255,255,255,0.3)", padding: "16px 12px 6px" }}>Workspace</div>
-          <button className={`nav-item${sidebarActive("announcements") ? " active" : ""}`} onClick={() => setActiveTab("announcements")}>Announcements</button>
           <button className={`nav-item${sidebarActive("faq") ? " active" : ""}`} onClick={() => setActiveTab("faq")}>Help Center</button>
-          <button className={`nav-item${sidebarActive("reports") ? " active" : ""}`} onClick={() => setActiveTab("reports")}>Reports</button>
           <button className={`nav-item${sidebarActive("ops-command") ? " active" : ""}`} onClick={() => setActiveTab("ops-command")}>Operations Command Center</button>
 
           {userRole === "admin" && (

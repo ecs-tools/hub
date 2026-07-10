@@ -238,7 +238,7 @@ export default function BillingDashboard({ userRole = "manager" }) {
 
   if (error) return (
     <div style={{ padding: 32, textAlign: "center", color: "#ef4444" }}>
-      <div style={{ fontSize: 20, marginBottom: 8 }}>⚠️ {error}</div>
+      <div style={{ fontSize: 20, marginBottom: 8 }}>{error}</div>
       <div style={{ fontSize: 13, color: "#9ca3af" }}>
         If you’re signed in and this persists, try a hard refresh (Ctrl+Shift+R).
       </div>
@@ -514,7 +514,7 @@ export default function BillingDashboard({ userRole = "manager" }) {
         <div style={cardStyle}>
           <div style={cardHeadStyle}>Billing Errors ({errors.length})</div>
           {errors.length === 0
-            ? <div style={{ padding: 32, textAlign: "center", color: "#9ca3af" }}>No errors found ✅</div>
+            ? <div style={{ padding: 32, textAlign: "center", color: "#9ca3af" }}>No errors found</div>
             : (
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -631,7 +631,7 @@ export default function BillingDashboard({ userRole = "manager" }) {
               </div>
               {earlyDepartures.length === 0
                 ? <div style={{ padding: 32, textAlign: "center", color: "#9ca3af" }}>
-                    No flags in this window ✅
+                    No flags in this window
                   </div>
                 : (
                   <div style={{ overflowX: "auto" }}>

@@ -1,12 +1,10 @@
 import React from "react";
-import { MODULE_IDS, PAGE_LABEL } from "../config/modules.js";
+import { PAGE_LABEL } from "../config/modules.js";
 
 // Top bar: breadcrumbs, the tracker saving indicator, and the search shell.
 export default function TopBar({ activeTab, setActiveTab, saving }) {
   const breadcrumbs = () => {
-    if (activeTab === "home") return [{ label: "Home" }];
-    if (activeTab === "modules") return [{ label: "Home", tab: "home" }, { label: "Modules" }];
-    if (MODULE_IDS.includes(activeTab)) return [{ label: "Home", tab: "home" }, { label: "Modules", tab: "modules" }, { label: PAGE_LABEL[activeTab] || activeTab }];
+    if (activeTab === "home" || activeTab === "modules") return [{ label: "Home" }];
     return [{ label: "Home", tab: "home" }, { label: PAGE_LABEL[activeTab] || activeTab }];
   };
   return (

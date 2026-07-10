@@ -1,14 +1,25 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { API_BASE } from "../config/api.js";
+import Icon from "./Icon.jsx";
 
 // Invoice Manager — the invoice side of AR (county / private-pay / flat-monthly
-// PDFs recorded in raw.invoice_registry by the generator tools). The claim side
-// (waiver/Medicaid paid-unpaid) lives in Billing Overview; don't conflate them.
+// PDFs recorded in raw.invoice_registry by the generator tools + backfill). The
+// claim side (waiver/Medicaid paid-unpaid) lives in Billing Overview; don't
+// conflate them.
 //
-// Reads /api/invoices + /api/invoices/summary; "mark paid/sent" PATCHes payment
-// fields (admin-only server-side). The backend answers { ready: false } until
-// the registry table has been created, and this component explains that state
-// instead of erroring — so it is always safe to ship ahead of the database.
+// Layout: per-TOOL tabs (ECS / Lorain / OSL / Patient Liability / SOS); within a
+// tab, invoices are grouped by folder (county / Private Pay / …) with per-invoice
+// PDF download, and a name/amount/month search. Payment tracking (mark sent /
+// record payment, aging) is retained. Reads /api/invoices + /api/invoices/summary;
+// downloads stream from /api/invoices/{id}/pdf.
+
+const TOOLS = [
+  { id: "ecs",    label: "ECS" },
+  { id: "lorain", label: "Lorain" },
+  { id: "osl",    label: "OSL" },
+  { id: "pl",     label: "Patient Liability" },
+  { id: "sos",    label: "SOS" },
+];
 
 const S = {
   body:      { padding: "24px 32px", maxWidth: 1400, margin: "0 auto" },
@@ -58,18 +69,16 @@ function Badge({ styleDef, children }) {
   );
 }
 
-// Full-page notice used for the "not set up yet" and "backend pending" states.
 function Notice({ title, children }) {
   return (
     <div style={{ ...S.card, maxWidth: 620, margin: "60px auto", textAlign: "center", padding: "40px 36px" }}>
-      <div style={{ fontSize: 30, marginBottom: 12 }}>🧾</div>
+      <div style={{ marginBottom: 12, color: "#94a3b8", display: "flex", justifyContent: "center" }}><Icon name="receipt" size={30} strokeWidth={1.5} /></div>
       <div style={{ fontSize: 18, fontWeight: 700, color: "#1a2d4d", marginBottom: 10 }}>{title}</div>
       <div style={{ fontSize: 14, color: "#64748b", lineHeight: 1.6 }}>{children}</div>
     </div>
   );
 }
 
-// Modal for recording a payment (full or partial) against one invoice.
 function PaymentModal({ invoice, onSave, onClose, saving }) {
   const openBalance = Number(invoice.open_balance || 0);
   const [amount, setAmount] = useState(openBalance > 0 ? openBalance.toFixed(2) : Number(invoice.amount).toFixed(2));
@@ -110,16 +119,101 @@ function PaymentModal({ invoice, onSave, onClose, saving }) {
   );
 }
 
+// One invoice line inside an expanded folder.
+function InvoiceRow({ inv, isAdmin, saving, onPay, onMarkSent }) {
+  const st = STATUS_STYLES[inv.status] || STATUS_STYLES.generated;
+  const ag = AGING_STYLES[inv.aging_bucket] || AGING_STYLES["Current (0-30)"];
+  return (
+    <tr>
+      <td style={{ ...S.td, fontWeight: 600, color: "#1a2d4d" }}>
+        {inv.client_name}
+        {inv.flag === "zero_with_billing" && (
+          <span style={{ marginLeft: 8, ...{ display: "inline-block", padding: "2px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: "#fee2e2", color: "#b91c1c" } }}>
+            $0 with billing
+          </span>
+        )}
+      </td>
+      <td style={{ ...S.td, whiteSpace: "nowrap" }}>{fmtMonth(inv.service_month)}</td>
+      <td style={{ ...S.td, textAlign: "right", whiteSpace: "nowrap" }}>{fmtMoney(inv.amount)}</td>
+      <td style={{ ...S.td, textAlign: "right", whiteSpace: "nowrap", fontWeight: 600, color: Number(inv.open_balance) > 0 ? "#b91c1c" : "#166534" }}>{fmtMoney(inv.open_balance)}</td>
+      <td style={S.td}><Badge styleDef={st}>{st.label}</Badge></td>
+      <td style={S.td}>
+        <Badge styleDef={ag}>{inv.aging_bucket}{inv.aging_bucket !== "Paid" && inv.days_outstanding > 0 ? ` · ${inv.days_outstanding}d` : ""}</Badge>
+      </td>
+      <td style={{ ...S.td, whiteSpace: "nowrap" }}>
+        {inv.has_pdf ? (
+          <a href={`${API_BASE}/api/invoices/${inv.id}/pdf`} target="_blank" rel="noopener noreferrer"
+            style={{ ...S.actionBtn, textDecoration: "none", display: "inline-block" }}>Download</a>
+        ) : <span style={{ fontSize: 12, color: "#94a3b8" }}>no PDF</span>}
+      </td>
+      {isAdmin && (
+        <td style={{ ...S.td, whiteSpace: "nowrap" }}>
+          {inv.status === "generated" && (
+            <button style={{ ...S.actionBtn, marginRight: 6 }} disabled={saving} onClick={() => onMarkSent(inv)}>Mark sent</button>
+          )}
+          {inv.status !== "paid" && inv.status !== "void" && (
+            <button style={{ ...S.actionBtn, background: "#1a2d4d", color: "#fff", border: "none" }} disabled={saving} onClick={() => onPay(inv)}>Record payment</button>
+          )}
+        </td>
+      )}
+    </tr>
+  );
+}
+
+// A collapsible folder group (county / Private Pay / …) within a tool tab.
+function FolderGroup({ folder, invoices, isAdmin, saving, onPay, onMarkSent, defaultOpen }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const total = invoices.reduce((s, i) => s + Number(i.amount || 0), 0);
+  const openBal = invoices.reduce((s, i) => s + Number(i.open_balance || 0), 0);
+  return (
+    <div style={{ ...S.card, padding: 0, marginBottom: 12, overflow: "hidden" }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", border: "none", background: "#f8fafc", padding: "12px 18px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+        <span style={{ fontSize: 12, color: "#64748b" }}>{open ? "▾" : "▸"}</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: "#1a2d4d" }}>{folder}</span>
+        <span style={{ fontSize: 12, color: "#64748b" }}>{invoices.length} invoice{invoices.length === 1 ? "" : "s"}</span>
+        <span style={{ marginLeft: "auto", fontSize: 13, color: "#475569" }}>
+          {fmtMoney(total)} billed{openBal > 0 ? <span style={{ color: "#b91c1c", fontWeight: 600 }}> · {fmtMoney(openBal)} open</span> : ""}
+        </span>
+      </button>
+      {open && (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={S.th}>Client</th>
+                <th style={S.th}>Month</th>
+                <th style={{ ...S.th, textAlign: "right" }}>Amount</th>
+                <th style={{ ...S.th, textAlign: "right" }}>Open</th>
+                <th style={S.th}>Status</th>
+                <th style={S.th}>Aging</th>
+                <th style={S.th}>PDF</th>
+                {isAdmin && <th style={S.th}>Actions</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {invoices.map(inv => (
+                <InvoiceRow key={inv.id} inv={inv} isAdmin={isAdmin} saving={saving} onPay={onPay} onMarkSent={onMarkSent} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function InvoicesDashboard({ onBack, userRole }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [backendPending, setBackendPending] = useState(false); // API route not deployed yet
-  const [notReady, setNotReady] = useState(null);               // registry table missing
+  const [backendPending, setBackendPending] = useState(false);
+  const [notReady, setNotReady] = useState(null);
   const [invoices, setInvoices] = useState([]);
   const [summary, setSummary] = useState(null);
-  const [statusFilter, setStatusFilter] = useState("open");     // open | all | one status
-  const [payerFilter, setPayerFilter] = useState("All");
+  const [activeTool, setActiveTool] = useState("ecs");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [monthFilter, setMonthFilter] = useState("All");
+  const [search, setSearch] = useState("");
   const [payModal, setPayModal] = useState(null);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
@@ -151,14 +245,48 @@ export default function InvoicesDashboard({ onBack, userRole }) {
   }
   useEffect(() => { load(); }, []);
 
-  const payers = useMemo(() => [...new Set(invoices.map(i => i.payer).filter(Boolean))].sort(), [invoices]);
-  const months = useMemo(() => [...new Set(invoices.map(i => String(i.service_month).slice(0, 10)))].sort().reverse(), [invoices]);
+  const byTool = useMemo(() => {
+    const m = {};
+    invoices.forEach(i => { (m[i.tool] = m[i.tool] || []).push(i); });
+    return m;
+  }, [invoices]);
 
-  const filtered = useMemo(() => invoices.filter(i =>
-    (statusFilter === "all" || (statusFilter === "open" ? (i.status !== "paid" && Number(i.open_balance) > 0) : i.status === statusFilter)) &&
-    (payerFilter === "All" || i.payer === payerFilter) &&
-    (monthFilter === "All" || String(i.service_month).slice(0, 10) === monthFilter)
-  ), [invoices, statusFilter, payerFilter, monthFilter]);
+  // Default to the first tool that actually has invoices.
+  useEffect(() => {
+    if (!invoices.length) return;
+    if (!(byTool[activeTool] || []).length) {
+      const firstWith = TOOLS.find(t => (byTool[t.id] || []).length);
+      if (firstWith) setActiveTool(firstWith.id);
+    }
+  }, [invoices]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const tabInvoices = byTool[activeTool] || [];
+
+  const months = useMemo(
+    () => [...new Set(tabInvoices.map(i => String(i.service_month).slice(0, 10)))].sort().reverse(),
+    [tabInvoices]
+  );
+
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return tabInvoices.filter(i => {
+      if (statusFilter !== "all" && (statusFilter === "open"
+        ? (i.status === "paid" || Number(i.open_balance) <= 0)
+        : i.status !== statusFilter)) return false;
+      if (monthFilter !== "All" && String(i.service_month).slice(0, 10) !== monthFilter) return false;
+      if (q) {
+        const hay = `${i.client_name} ${i.amount} ${fmtMonth(i.service_month)} ${i.folder_name || ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [tabInvoices, statusFilter, monthFilter, search]);
+
+  const folders = useMemo(() => {
+    const m = {};
+    visible.forEach(i => { (m[i.folder_name || "—"] = m[i.folder_name || "—"] || []).push(i); });
+    return Object.entries(m).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [visible]);
 
   const bucketAmounts = useMemo(() => {
     const map = {};
@@ -182,7 +310,6 @@ export default function InvoicesDashboard({ onBack, userRole }) {
       const updated = await res.json();
       setInvoices(list => list.map(i => (i.id === updated.id ? updated : i)));
       showToast(successMsg);
-      // Refresh KPI cards in the background so buckets stay honest.
       fetch(`${API_BASE}/api/invoices/summary`, { credentials: "include" })
         .then(r => (r.ok ? r.json() : null)).then(d => { if (d && d.ready !== false) setSummary(d); })
         .catch(() => {});
@@ -222,13 +349,13 @@ export default function InvoicesDashboard({ onBack, userRole }) {
   if (!invoices.length) return (
     <Notice title="No invoices recorded yet">
       The registry is live and waiting. Invoices appear here automatically the next
-      time a generator tool runs (PL, ECS, SOS so far) — nothing to upload by hand.
+      time a generator tool runs — nothing to upload by hand.
     </Notice>
   );
 
   return (
     <div style={S.body}>
-      {/* KPI strip */}
+      {/* KPI strip (overall AR across all tools) */}
       <div style={{ ...S.row, gridTemplateColumns: "repeat(5, 1fr)" }}>
         <div style={S.card}>
           <div style={S.cardTitle}>Total Open</div>
@@ -244,84 +371,64 @@ export default function InvoicesDashboard({ onBack, userRole }) {
         ))}
       </div>
 
-      {/* Filters */}
-      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={S.select}>
-          <option value="open">Open only</option>
-          <option value="all">All statuses</option>
-          {Object.entries(STATUS_STYLES).map(([v, s]) => <option key={v} value={v}>{s.label}</option>)}
-        </select>
-        <select value={payerFilter} onChange={e => setPayerFilter(e.target.value)} style={S.select}>
-          <option>All</option>
-          {payers.map(p => <option key={p}>{p}</option>)}
-        </select>
+      {/* Tool tabs */}
+      <div style={{ display: "flex", gap: 4, borderBottom: "2px solid #e2e8f0", marginBottom: 18, flexWrap: "wrap" }}>
+        {TOOLS.map(t => {
+          const n = (byTool[t.id] || []).length;
+          const active = activeTool === t.id;
+          return (
+            <button key={t.id} onClick={() => setActiveTool(t.id)}
+              style={{
+                border: "none", background: "none", cursor: "pointer", fontFamily: "inherit",
+                padding: "10px 16px", fontSize: 14, fontWeight: active ? 700 : 500,
+                color: active ? "#1a2d4d" : "#64748b",
+                borderBottom: active ? "3px solid #1a2d4d" : "3px solid transparent", marginBottom: -2,
+              }}>
+              {t.label}
+              <span style={{ marginLeft: 7, fontSize: 12, fontWeight: 600, color: active ? "#1a2d4d" : "#94a3b8" }}>{n}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Per-tab controls */}
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+        <input type="text" placeholder="Search name, amount, month…" value={search} onChange={e => setSearch(e.target.value)}
+          style={{ ...S.select, width: 240, border: `1.5px solid ${search ? "#3b82f6" : "#e2e8f0"}`, background: search ? "#eff6ff" : "white" }} />
         <select value={monthFilter} onChange={e => setMonthFilter(e.target.value)} style={S.select}>
           <option>All</option>
           {months.map(m => <option key={m} value={m}>{fmtMonth(m)}</option>)}
         </select>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={S.select}>
+          <option value="all">All statuses</option>
+          <option value="open">Open only</option>
+          {Object.entries(STATUS_STYLES).map(([v, s]) => <option key={v} value={v}>{s.label}</option>)}
+        </select>
         <div style={{ fontSize: 12, color: "#64748b", marginLeft: "auto" }}>
-          {filtered.length} of {invoices.length} invoices
+          {visible.length} of {tabInvoices.length} invoices
         </div>
       </div>
 
-      {/* Invoice table */}
-      <div style={{ ...S.card, padding: 0, overflow: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={S.th}>Invoice #</th>
-              <th style={S.th}>Client</th>
-              <th style={S.th}>Payer</th>
-              <th style={S.th}>Month</th>
-              <th style={{ ...S.th, textAlign: "right" }}>Amount</th>
-              <th style={{ ...S.th, textAlign: "right" }}>Open</th>
-              <th style={S.th}>Status</th>
-              <th style={S.th}>Aging</th>
-              {isAdmin && <th style={S.th}>Actions</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map(inv => {
-              const st = STATUS_STYLES[inv.status] || STATUS_STYLES.generated;
-              const ag = AGING_STYLES[inv.aging_bucket] || AGING_STYLES["Current (0-30)"];
-              return (
-                <tr key={inv.id}>
-                  <td style={{ ...S.td, fontFamily: "ui-monospace, monospace", fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>{inv.invoice_no}</td>
-                  <td style={{ ...S.td, fontWeight: 600, color: "#1a2d4d" }}>{inv.client_name}</td>
-                  <td style={S.td}>{inv.payer}</td>
-                  <td style={{ ...S.td, whiteSpace: "nowrap" }}>{fmtMonth(inv.service_month)}</td>
-                  <td style={{ ...S.td, textAlign: "right", whiteSpace: "nowrap" }}>{fmtMoney(inv.amount)}</td>
-                  <td style={{ ...S.td, textAlign: "right", whiteSpace: "nowrap", fontWeight: 600, color: Number(inv.open_balance) > 0 ? "#b91c1c" : "#166534" }}>{fmtMoney(inv.open_balance)}</td>
-                  <td style={S.td}><Badge styleDef={st}>{st.label}</Badge></td>
-                  <td style={S.td}>
-                    <Badge styleDef={ag}>{inv.aging_bucket}{inv.aging_bucket !== "Paid" && inv.days_outstanding > 0 ? ` · ${inv.days_outstanding}d` : ""}</Badge>
-                  </td>
-                  {isAdmin && (
-                    <td style={{ ...S.td, whiteSpace: "nowrap" }}>
-                      {inv.status === "generated" && (
-                        <button style={{ ...S.actionBtn, marginRight: 6 }} disabled={saving}
-                          onClick={() => patchInvoice(inv, { status: "sent" }, `${inv.client_name} marked sent`)}>
-                          Mark sent
-                        </button>
-                      )}
-                      {inv.status !== "paid" && inv.status !== "void" && (
-                        <button style={{ ...S.actionBtn, background: "#1a2d4d", color: "#fff", border: "none" }} disabled={saving}
-                          onClick={() => setPayModal(inv)}>
-                          Record payment
-                        </button>
-                      )}
-                    </td>
-                  )}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      {/* Folder-grouped invoices for the active tool */}
+      {tabInvoices.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8", fontSize: 14 }}>
+          No invoices recorded for {TOOLS.find(t => t.id === activeTool)?.label} yet.
+        </div>
+      ) : folders.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "50px 0", color: "#94a3b8", fontSize: 14 }}>
+          No invoices match the current filters.
+        </div>
+      ) : (
+        folders.map(([folder, list], idx) => (
+          <FolderGroup key={folder} folder={folder} invoices={list} isAdmin={isAdmin} saving={saving}
+            defaultOpen={folders.length <= 3 || idx === 0}
+            onPay={setPayModal} onMarkSent={(inv) => patchInvoice(inv, { status: "sent" }, `${inv.client_name} marked sent`)} />
+        ))
+      )}
 
       <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 12, lineHeight: 1.5 }}>
         Aging is measured from the end of the service month. This page covers invoices the
-        tools generate (county / private pay / flat-monthly); waiver-claim AR lives in Billing Overview.
+        tools generate (county / private pay / patient-liability / vouchers); waiver-claim AR lives in Billing Overview.
       </div>
 
       {payModal && (

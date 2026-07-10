@@ -18,6 +18,12 @@ function parseDollar(val) {
   return isNaN(n) ? null : n;
 }
 
+function parseNum(val) {
+  if (val === null || val === undefined || val === "") return null;
+  const n = parseFloat(String(val).replace(/[,\s]/g, ""));
+  return isNaN(n) ? null : n;
+}
+
 function daysUntil(date) {
   if (!date) return null;
   const now = new Date();
@@ -43,10 +49,13 @@ function worstLevel(services) {
 
 function svcLabel(desc) {
   const d = (desc || "").toLowerCase();
-  if (d.includes("transport")) return "NMT";
+  // "non-med" catches both "Non-Medical Transportation" and the misspelled
+  // "Non-Medical Tranportation" (missing 's') that the "transport" check missed.
+  if (d.includes("non-med") || d.includes("transport")) return "NMT";
   if (d.includes("adult day") || d.includes("voc hab")) return "ADS";
   if (d.includes("shared living")) return "SL";
   if (d.includes("respite")) return "Respite";
+  if (d.includes("employment")) return "IES";
   return desc || "Service";
 }
 
@@ -72,6 +81,15 @@ function ServiceRow({ svc }) {
             {svc.serviceLabel}
           </span>
           <span style={BADGE(level)}>{pct}% used</span>
+          {svc.ended ? (
+            <span style={{ fontSize: 11, fontWeight: 600, color: "#6b21a8", background: "#f3e8ff", padding: "2px 7px", borderRadius: 4 }}>
+              Prior period
+            </span>
+          ) : (
+            <span style={{ fontSize: 11, fontWeight: 600, color: "#1d4ed8", background: "#eff6ff", padding: "2px 7px", borderRadius: 4 }}>
+              Current
+            </span>
+          )}
           {lowDollar && (
             <span style={{ ...BADGE("red"), background: "#fff1f2" }}>${svc.dollarRemaining.toFixed(2)} remaining</span>
           )}
@@ -80,11 +98,17 @@ function ServiceRow({ svc }) {
               ${svc.dollarRemaining.toLocaleString("en-US", { maximumFractionDigits: 0 })} remaining
             </span>
           )}
+          {svc.unitsRemaining !== null && (
+            <span style={{ fontSize: 11, color: "#64748b" }}>
+              {svc.unitsRemaining.toLocaleString()}{svc.totalUnits !== null ? ` / ${svc.totalUnits.toLocaleString()}` : ""} units
+            </span>
+          )}
         </div>
         {svc.serviceEndDate && (
-          <span style={{ fontSize: 11, fontWeight: days !== null && days <= 14 ? 700 : 400, color: days !== null && days <= 30 ? "#dc2626" : "#64748b" }}>
-            Ends {svc.serviceEndDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-            {days !== null && ` · ${days}d`}
+          <span style={{ fontSize: 11, fontWeight: !svc.ended && days !== null && days <= 14 ? 700 : 400, color: !svc.ended && days !== null && days <= 30 ? "#dc2626" : "#64748b" }}>
+            {svc.ended ? "Ended " : "Ends "}
+            {svc.serviceEndDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+            {!svc.ended && days !== null && ` · ${days}d`}
           </span>
         )}
       </div>
@@ -191,8 +215,11 @@ export default function UtilizationDashboard() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const activeMap = {};
-    const endedMap  = {};
+    // Per client, per service, track TWO spans: the prior-period span (most recent
+    // ENDED span with real usage) AND the current span (not yet ended). You see
+    // last period's final utilization next to the fresh span filling up this
+    // period. services[label] = { current, prior }.
+    const clientMap = {};
 
     // Warn if column headers appear to be missing (likely a source-file format change)
     if (rows.length > 0) {
@@ -209,6 +236,14 @@ export default function UtilizationDashboard() {
       }
     }
 
+    // Prefer the more recent service period; tie-break on higher utilization.
+    const isBetter = (a, b) => {
+      const ta = a.serviceEndDate ? a.serviceEndDate.getTime() : 0;
+      const tb = b.serviceEndDate ? b.serviceEndDate.getTime() : 0;
+      if (ta !== tb) return ta > tb;
+      return a.pctUsed > b.pctUsed;
+    };
+
     rows.forEach(row => {
       // Normalize all keys by trimming whitespace so "% Remaining " === "% Remaining"
       const ut = Object.fromEntries(
@@ -223,39 +258,52 @@ export default function UtilizationDashboard() {
       if (isNaN(pctRem)) return;
       const pctUsed = 1 - pctRem;
 
-      // Skip not-started (pctUsed ≤ 0) and fully exhausted (pctUsed ≥ 1)
-      if (pctUsed <= 0.001 || pctUsed >= 0.999) return;
+      const serviceEndDate = excelToDate(ut["Service End Date"]);
+      const ended          = !!(serviceEndDate && serviceEndDate < today);
 
-      const dollarRemaining = parseDollar(ut["Measure Values"]);
-      const serviceEndDate  = excelToDate(ut["Service End Date"]);
-      const label           = svcLabel(ut["Paws Service Code Desc"]);
-      const hasEnded        = serviceEndDate && serviceEndDate < today;
+      // Prior (ended) spans: keep only those with real usage. Current spans: always
+      // show (even at 0%) so the new period is visible as it fills in.
+      if (ended && (pctUsed <= 0.001 || pctUsed >= 0.999)) return;
 
-      const svcEntry = { pctUsed, dollarRemaining, serviceEndDate, serviceLabel: label };
-      const county   = (ut["PAWS County Name"] || "").trim();
-      const waiver   = (ut["Waiver Type"] || "").trim();
+      const label  = svcLabel(ut["Paws Service Code Desc"]);
+      const svcEntry = {
+        pctUsed,
+        dollarRemaining: parseDollar(ut["Measure Values"]),
+        unitsRemaining:  parseNum(ut["Units Remaining"]),
+        totalUnits:      parseNum(ut["Total Units"]),
+        serviceEndDate,
+        serviceLabel: label,
+        ended,
+      };
+      const county = (ut["PAWS County Name"] || "").trim();
+      const waiver = (ut["Waiver Type"] || "").trim();
 
-      if (hasEnded) {
-        // Ended period with unused funds
-        if (!endedMap[name]) endedMap[name] = { name, county, waiverType: waiver, services: {} };
-        // One row per service label — keep highest pctUsed
-        const existing = endedMap[name].services[label];
-        if (!existing || pctUsed > existing.pctUsed) endedMap[name].services[label] = svcEntry;
-      } else {
-        // Active period
-        if (!activeMap[name]) activeMap[name] = { name, county, waiverType: waiver, services: {} };
-        const existing = activeMap[name].services[label];
-        if (!existing || pctUsed > existing.pctUsed) activeMap[name].services[label] = svcEntry;
-      }
+      if (!clientMap[name]) clientMap[name] = { name, county, waiverType: waiver, services: {} };
+      const slot = clientMap[name].services[label] ||
+        (clientMap[name].services[label] = { current: null, prior: null });
+      const key = ended ? "prior" : "current";
+      if (!slot[key] || isBetter(svcEntry, slot[key])) slot[key] = svcEntry;
     });
 
-    // Convert services map → sorted array (highest % used first)
-    const toArray = (map) => Object.values(map).map(c => ({
-      ...c,
-      services: Object.values(c.services).sort((a, b) => b.pctUsed - a.pctUsed),
-    }));
+    // Flatten each service's {current, prior} into rows; keep same-service rows
+    // adjacent (current before prior).
+    const toArray = (map) => Object.values(map).map(c => {
+      const services = [];
+      Object.values(c.services).forEach(slot => {
+        if (slot.current) services.push(slot.current);
+        if (slot.prior)   services.push(slot.prior);
+      });
+      services.sort((a, b) =>
+        a.serviceLabel === b.serviceLabel
+          ? (a.ended ? 1 : 0) - (b.ended ? 1 : 0)
+          : a.serviceLabel.localeCompare(b.serviceLabel)
+      );
+      return { ...c, services };
+    });
 
-    return { activeClients: toArray(activeMap), endedClients: toArray(endedMap) };
+    // endedClients kept as [] — the separate buried section is retired; prior spans
+    // now render inline in each client's card.
+    return { activeClients: toArray(clientMap), endedClients: [] };
   }, [rows]);
 
   const counties = useMemo(() => {
@@ -309,6 +357,12 @@ export default function UtilizationDashboard() {
 
   return (
     <div style={{ padding: "24px 32px", maxWidth: 1400, margin: "0 auto" }}>
+
+      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14 }}>
+        Each service shows the <span style={{ fontWeight: 600, color: "#1d4ed8" }}>Current</span> span
+        and, where it applies, the just-ended <span style={{ fontWeight: 600, color: "#6b21a8" }}>Prior period</span>.
+        Current spans fill in as billing posts. Dollars and units remaining shown per span.
+      </div>
 
       {/* Filter buttons — Action Needed / Monitor / Good / All */}
       <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>

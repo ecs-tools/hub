@@ -2,10 +2,10 @@ import React, { useState, useEffect, useCallback } from "react";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import FleetDashboard from "./components/FleetDashboard.jsx";
 import UtilizationDashboard from "./components/UtilizationDashboard.jsx";
-import HomeDashboard from "./components/HomeDashboard.jsx";
 import BillingDashboard from "./components/BillingDashboard.jsx";
 import ProviderReportsDashboard from "./components/ProviderReportsDashboard.jsx";
 import InvoicesDashboard from "./components/InvoicesDashboard.jsx";
+import RebillingDashboard from "./components/RebillingDashboard.jsx";
 import OpsDashboard from "./components/OpsDashboard.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
 import NoteModal from "./components/NoteModal.jsx";
@@ -142,7 +142,7 @@ export default function App() {
           justifyContent: "space-between",
           gap: 16,
         }}>
-          <span>Data service may be unavailable — some information may not load correctly. If this persists, contact Brock.</span>
+          <span>Data service may be unavailable — some information may not load correctly. If this persists, contact the System Admin.</span>
           <button
             onClick={() => setSheetDbBannerVisible(false)}
             style={{
@@ -166,33 +166,8 @@ export default function App() {
         <AdminPanel apiBase={API_BASE} modules={MODULES} />
       )}
 
-      {/* HOME PAGE */}
-      {activeTab === "home" && (
-        <div className="page-anim">
-          <div style={{ borderBottom: "1px solid var(--border)", padding: "20px 40px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div>
-              <h1 style={{ fontSize: 20, fontWeight: 700, color: "var(--text-1)", margin: 0, letterSpacing: "-0.3px" }}>Overview</h1>
-              <p style={{ fontSize: 13, color: "var(--text-2)", margin: "3px 0 0" }}>Live snapshot across billing, funding, and fleet.</p>
-            </div>
-            <button onClick={() => setActiveTab("modules")} style={{ background: "var(--navy)", color: "#fff", border: "none", borderRadius: 7, padding: "8px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-              All Modules
-            </button>
-          </div>
-          <div style={{ position: "relative" }}>
-            <HomeDashboard rawData={tracker.rawData} statuses={tracker.statuses} onNavigate={setActiveTab} />
-            {userRole !== "admin" && (
-              <div style={{ position: "absolute", inset: 0, background: "rgba(255,255,255,0.82)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", zIndex: 20, minHeight: 300 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", color: "var(--steel)", marginBottom: 10 }}>Coming Soon</div>
-                <div style={{ fontSize: 30, fontWeight: 800, color: "var(--navy)", letterSpacing: "-0.5px" }}>Under Construction</div>
-                <div style={{ fontSize: 14, color: "var(--text-2)", marginTop: 10, maxWidth: 320, textAlign: "center", lineHeight: 1.6 }}>The overview dashboard is being prepared. Check back soon.</div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* MODULES PAGE */}
-      {activeTab === "modules" && (
+      {/* HOME — combined intro + module launcher (Home and Modules merged) */}
+      {(activeTab === "home" || activeTab === "modules") && (
         <ModulesPage canAccessModule={canAccessModule} onOpenModule={setActiveTab} />
       )}
 
@@ -208,9 +183,9 @@ export default function App() {
           Hidden when UnderConstruction is rendering — UC has its own back button. */}
       {MODULE_IDS.includes(activeTab) && !showUnderConstruction && (
         <div style={{ background: "var(--bg)", borderBottom: "1px solid var(--border)", padding: "10px 24px", display: "flex", alignItems: "center", gap: 12 }}>
-          <button className="back-btn" onClick={() => setActiveTab("modules")}
+          <button className="back-btn" onClick={() => setActiveTab("home")}
             style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, padding: "5px 12px", fontSize: 13, fontWeight: 500, color: "var(--text-2)", cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}>
-            ← Back to Modules
+            ← Home
           </button>
           {(activeTab === "tracker" || activeTab === "calculator") && (
             <>
@@ -306,6 +281,14 @@ export default function App() {
         <div className="page-anim">
           <ErrorBoundary moduleName="Invoice Manager">
             <InvoicesDashboard onBack={() => setActiveTab("home")} userRole={userRole} />
+          </ErrorBoundary>
+        </div>
+      )}
+
+      {activeTab === "rebilling" && !showUnderConstruction && (
+        <div className="page-anim">
+          <ErrorBoundary moduleName="Rebilling & Unpaids">
+            <RebillingDashboard onBack={() => setActiveTab("home")} userRole={userRole} />
           </ErrorBoundary>
         </div>
       )}

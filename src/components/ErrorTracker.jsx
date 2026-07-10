@@ -2,9 +2,9 @@ import React from "react";
 import { makeKey, centerName, progressColor, formatDate } from "../utils/tracker.js";
 
 const STATUS_OPTIONS = [
-  { value: "fixed", label: "Fixed", icon: "✅", color: "#16a34a", bg: "#dcfce7", border: "#86efac" },
-  { value: "disputed", label: "Not an Error", icon: "❌", color: "#dc2626", bg: "#fee2e2", border: "#fca5a5" },
-  { value: "open", label: "Open", icon: "⚪", color: "#6b7280", bg: "#f3f4f6", border: "#d1d5db" },
+  { value: "fixed", label: "Fixed", color: "#16a34a", bg: "#dcfce7", border: "#86efac" },
+  { value: "disputed", label: "Not an Error", color: "#dc2626", bg: "#fee2e2", border: "#fca5a5" },
+  { value: "open", label: "Open", color: "#6b7280", bg: "#f3f4f6", border: "#d1d5db" },
 ];
 
 const CATEGORY_COLORS = {
@@ -229,7 +229,7 @@ export default function ErrorTracker({ tracker, userRole, onOpenNote }) {
                 {filtered.length === 0 && (
                   <tr><td colSpan={trackerView === "week" ? 7 : 8} style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>
                     {trackerView === "carryover" && selectedWeek === "All Weeks" && selectedCenter === "All Centers" && selectedCategory === "All Types"
-                      ? "Nothing carried over — every closed week's errors were resolved. 🎉"
+                      ? "Nothing carried over — every closed week's errors were resolved."
                       : "No errors found for this selection."}
                   </td></tr>
                 )}
