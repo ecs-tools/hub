@@ -91,7 +91,7 @@ export default function LoginScreen({
         <div className="brand-mid" style={{ maxWidth: 380 }}>
           <div style={{ width: 34, height: 2, background: "#4a7ab5", marginBottom: 18 }} />
           <div style={{ fontSize: 22, fontWeight: 600, lineHeight: 1.35, letterSpacing: "-0.2px" }}>
-            Billing, invoicing, funding, and fleet — one place of work.
+            All your tools — one place of work.
           </div>
           <div style={{ fontSize: 13, color: "rgba(255,255,255,0.55)", marginTop: 14, lineHeight: 1.6 }}>
             Weekly pipelines land the data. You review, invoice, and resolve — here.
