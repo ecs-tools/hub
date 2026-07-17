@@ -20,7 +20,7 @@ const CATEGORY_COLORS = {
 // The Billing Error Detection page: view switcher, center progress row,
 // filters, and the error table. All state lives in useErrorTracker; this
 // component only renders what the hook returns.
-export default function ErrorTracker({ tracker, userRole, onOpenNote }) {
+export default function ErrorTracker({ tracker, onOpenNote }) {
   const {
     rawData, history, carryoverRows, trackerView, setTrackerView,
     selectedWeek, setSelectedWeek, selectedCenter, setSelectedCenter,
@@ -30,10 +30,10 @@ export default function ErrorTracker({ tracker, userRole, onOpenNote }) {
   } = tracker;
   return (
     <div style={{ padding: "24px 32px" }}>
-        {/* View switcher: This Week / Backlog / Carryover. Admin-only preview
-            for now (the history endpoint is also admin-gated server-side);
-            drop the role check here when managers should see it. */}
-        {userRole === "admin" && history.length > 0 && (
+        {/* View switcher: This Week / Backlog / Carryover — visible to every
+            role since 2026-07-17. The server decides what each role's rows
+            contain: non-admins never receive transport/invalid-unit errors. */}
+        {history.length > 0 && (
           <div style={{ display: "inline-flex", background: "#f1f5f9", borderRadius: 10, padding: 3, marginBottom: 18, border: "1.5px solid #e2e8f0" }}>
             {[
               { id: "week", label: "This Week", count: rawData.length },
