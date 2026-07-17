@@ -18,7 +18,7 @@ import Icon from "./Icon.jsx";
 const TOOLS = [
   { id: "ecs",    label: "ECS",               upload: "required", inputHint: "BillingByCostCenterDetail3 CSV" },
   { id: "lorain", label: "Lorain",            upload: null },   // not yet runnable from the site (port pending)
-  { id: "osl",    label: "OSL",               upload: null },   // not yet runnable from the site (port pending)
+  { id: "osl",    label: "OSL",               upload: "required", inputHint: "BillingByCostCenterDetail3 CSV (OSL export — ASA day counts)" },
   { id: "pl",     label: "Patient Liability", upload: "none",     inputHint: "Config-driven — no master file" },
   { id: "sos",    label: "SOS",               upload: "required", inputHint: "Month CSV" },
   { id: "sy",     label: "Summer Youth",      upload: "optional", inputHint: "Fresh Brittco export (recommended for a closed month); otherwise reads the warehouse" },
