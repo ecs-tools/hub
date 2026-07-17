@@ -20,7 +20,7 @@ export default function ModulesPage({ canAccessModule, onOpenModule }) {
       <p style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.7px", color: "var(--text-3)", margin: "0 0 8px" }}>Empowered IS</p>
       <h1 style={{ fontSize: 26, fontWeight: 800, color: "var(--text-1)", letterSpacing: "-0.5px", margin: "0 0 8px", lineHeight: 1.15 }}>Welcome back</h1>
       <p style={{ fontSize: 15, color: "var(--text-2)", margin: "0 0 34px", lineHeight: 1.5, maxWidth: 620 }}>
-        Your billing, funding, and fleet tools — all in one place. Pick a module below to get started.
+        All your tools in one place. Pick a module below to get started.
       </p>
 
       {[...MODULE_CATEGORIES, "Other"].map(cat => {
