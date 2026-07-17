@@ -24,6 +24,16 @@ const TOOLS = [
   { id: "sy",     label: "Summer Youth",      upload: "optional", inputHint: "Fresh Brittco export (recommended for a closed month); otherwise reads the warehouse" },
 ];
 
+// County-scoped ECS re-runs (CONSOLIDATION_PLAN §7.1 — county cards INSIDE the
+// ECS tab). They reuse the billing CSV already on the office PC from the
+// month's main ECS run, so no master upload here.
+const COUNTY_RUNS = [
+  { id: "ecs_warren", label: "Warren County", transportUpload: true,
+    hint: "Optional TransportByRoute CSV adds per-client pickup/drop-off pages to each invoice." },
+  { id: "ecs_montgomery", label: "Montgomery County", transportUpload: false,
+    hint: "Transport pages pull a fresh 211 TransportByRoute export from Brittco automatically." },
+];
+
 const S = {
   body:      { padding: "24px 32px", maxWidth: 1400, margin: "0 auto" },
   row:       { display: "grid", gap: 14, marginBottom: 16 },
@@ -230,6 +240,72 @@ function GenerateCard({ tool, billingMonth, latestRun, busy, onGenerate }) {
           Runs execute on the office PC (it has the Brittco + B:\ access) — if it's off, the run expires after 2 hours.
         </div>
       )}
+    </div>
+  );
+}
+
+// One county row inside the county-runs card.
+function CountyRunRow({ county, latestRun, busy, anyEcsActive, onRun }) {
+  const [clients, setClients] = useState("");
+  const [file, setFile] = useState(null);
+  const fileRef = useRef(null);
+  const runActive = latestRun && (latestRun.status === "queued" || latestRun.status === "running");
+  const canRun = !busy && !anyEcsActive;
+
+  return (
+    <div style={{ borderTop: "1px solid var(--bg-hover)", paddingTop: 12, marginTop: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ minWidth: 200, flex: "1 1 240px" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--navy)" }}>{county.label}</div>
+          <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 2 }}>{county.hint}</div>
+        </div>
+
+        <input type="text" placeholder="Only these clients (optional) — Last, First; Last, First"
+          value={clients} onChange={e => setClients(e.target.value)}
+          style={{ ...S.select, width: 250, fontSize: 12 }} />
+
+        {county.transportUpload && (
+          <>
+            <input ref={fileRef} type="file" accept=".csv" style={{ display: "none" }}
+              onChange={e => setFile(e.target.files?.[0] || null)} />
+            <button onClick={() => fileRef.current?.click()} disabled={!canRun} style={S.actionBtn}>
+              {file ? "Replace transport CSV" : "Transport CSV (optional)"}
+            </button>
+            {file && <span style={{ fontSize: 12, color: "var(--text-1)", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</span>}
+          </>
+        )}
+
+        <button disabled={!canRun}
+          onClick={() => onRun(county.id, file, clients).then(ok => {
+            if (ok) { setFile(null); setClients(""); if (fileRef.current) fileRef.current.value = ""; }
+          })}
+          style={{ ...S.actionBtn, background: canRun ? "var(--navy)" : "#94a3b8", color: "#fff", border: "none", padding: "7px 14px" }}>
+          {runActive ? "Run in progress" : `Run ${county.label.split(" ")[0]} only`}
+        </button>
+      </div>
+      <RunStatusLine run={latestRun} />
+    </div>
+  );
+}
+
+// County-scoped re-runs card — shown inside the ECS tab only (admin).
+function CountyRunsCard({ runs, busy, onRun }) {
+  // Any run touching the shared ECS 1_INPUT blocks the whole family.
+  const anyEcsActive = runs.some(r =>
+    (r.tool === "ecs" || r.tool.startsWith("ecs_")) &&
+    (r.status === "queued" || r.status === "running"));
+  return (
+    <div style={{ ...S.card, marginBottom: 16 }}>
+      <div style={S.cardTitle}>County-scoped re-runs</div>
+      <div style={{ fontSize: 12, color: "var(--text-2)" }}>
+        Regenerate ONE county without re-running the rest — replaces editing the
+        old B:\ ad-hoc scripts. Uses the billing CSV already on the office PC
+        from this month's main ECS run.
+      </div>
+      {COUNTY_RUNS.map(c => (
+        <CountyRunRow key={c.id} county={c} busy={busy} anyEcsActive={anyEcsActive}
+          latestRun={runs.find(r => r.tool === c.id) || null} onRun={onRun} />
+      ))}
     </div>
   );
 }
@@ -604,6 +680,42 @@ export default function InvoicesDashboard({ userRole }) {
     }
   }
 
+  async function runCounty(countyId, transportFile, clients) {
+    setRunBusy(true);
+    try {
+      let transportUploadId = null;
+      if (transportFile) {
+        const fd = new FormData();
+        fd.append("tool", countyId);
+        fd.append("file", transportFile);
+        const upRes = await fetch(`${API_BASE}/api/invoices/upload`, {
+          method: "POST", credentials: "include", body: fd,
+        });
+        if (!upRes.ok) throw new Error((await upRes.json().catch(() => ({}))).detail || "Transport upload failed");
+        transportUploadId = (await upRes.json()).upload_id;
+      }
+      const runRes = await fetch(`${API_BASE}/api/invoices/run`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tool: countyId,
+          transport_upload_id: transportUploadId,
+          clients: clients?.trim() || null,
+        }),
+      });
+      if (!runRes.ok) throw new Error((await runRes.json().catch(() => ({}))).detail || "Could not queue the run");
+      const data = await runRes.json();
+      showToast(`${COUNTY_RUNS.find(c => c.id === countyId)?.label} run queued for ${data.billing_month}`);
+      loadRuns();
+      return true;
+    } catch (e) {
+      showToast(e.message);
+      return false;
+    } finally {
+      setRunBusy(false);
+    }
+  }
+
   const byTool = useMemo(() => {
     const m = {};
     invoices.forEach(i => { (m[i.tool] = m[i.tool] || []).push(i); });
@@ -765,6 +877,11 @@ export default function InvoicesDashboard({ userRole }) {
       {isAdmin && (
         <GenerateCard tool={activeTool} billingMonth={billingMonth?.billing_month || "…"}
           latestRun={latestRunForTool} busy={runBusy} onGenerate={generateInvoices} />
+      )}
+
+      {/* County-scoped re-runs — ECS tab only (§7.1: county cards inside the tab) */}
+      {isAdmin && activeTool === "ecs" && (
+        <CountyRunsCard runs={runs} busy={runBusy} onRun={runCounty} />
       )}
 
       {/* Per-tab controls */}
