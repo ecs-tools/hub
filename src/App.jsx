@@ -69,8 +69,8 @@ export default function App() {
   // Still checking session — show nothing to avoid flash of login screen
   if (auth.isAuthenticated === null) {
     return (
-      <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0f172a 0%, #1a3a6b 55%, #0f172a 100%)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 14 }}>Loading…</div>
+      <div style={{ minHeight: "100vh", background: "#1a2d4d", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 14, fontFamily: "'IBM Plex Sans', system-ui, sans-serif" }}>Loading…</div>
       </div>
     );
   }
@@ -117,7 +117,7 @@ export default function App() {
     (MODULES.find(m => m.id === activeTab) || {}).name || "This module";
 
   return (
-    <div style={{ fontFamily: "'DM Sans', system-ui, sans-serif", background: "var(--bg)", minHeight: "100vh", color: "var(--text-1)", display: "flex" }}>
+    <div style={{ fontFamily: "var(--font-sans)", background: "var(--bg)", minHeight: "100vh", color: "var(--text-1)", display: "flex" }}>
       <GlobalStyles />
 
       {/* LEFT SIDEBAR */}

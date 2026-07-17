@@ -1,11 +1,11 @@
 import React from "react";
 import { MODULES, MODULE_CATEGORIES } from "../config/modules.js";
-import Icon from "./Icon.jsx";
 
 // The Home page: a friendly intro header followed by the module cards, grouped
 // by category. This is the single landing page (Home + Modules merged) — no
 // metrics, just a clear "pick what you need" launcher aimed at non-technical
-// users (big targets, plain descriptions, an icon per module for quick scanning).
+// users. Text-first tiles (icons removed 2026-07-17, CONSOLIDATION_PLAN §6):
+// the module NAME carries the scan weight, badges carry the state.
 const badge = (bg, color, bordered) => ({
   position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 700,
   textTransform: "uppercase", letterSpacing: "0.5px", padding: "3px 8px",
@@ -50,14 +50,11 @@ export default function ModulesPage({ canAccessModule, onOpenModule }) {
                         ? <span style={badge("#dcfce7", "#166534")}>Active</span>
                         : <span style={badge("var(--bg-soft)", "var(--text-3)", true)}>Locked</span>}
 
-                    <div style={{ width: 40, height: 40, borderRadius: 9, marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "center", background: canAccess ? "var(--navy)" : "var(--bg-soft)", color: canAccess ? "#fff" : "var(--text-3)", border: canAccess ? "none" : "1px solid var(--border)" }}>
-                      <Icon name={m.icon} size={20} />
-                    </div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-1)", marginBottom: 5 }}>{m.name}</div>
-                    <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>{m.description}</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: canAccess ? "var(--navy)" : "var(--text-3)", letterSpacing: "-0.2px", marginBottom: 6, paddingRight: 76 }}>{m.name}</div>
+                    <div style={{ fontSize: 13, color: canAccess ? "var(--text-2)" : "var(--text-3)", lineHeight: 1.5 }}>{m.description}</div>
 
-                    {canAccess && <div style={{ marginTop: 16, fontSize: 12, fontWeight: 700, color: "var(--navy)", letterSpacing: "-0.1px" }}>Open &rarr;</div>}
-                    {comingSoon && <div style={{ marginTop: 16, fontSize: 12, fontWeight: 600, color: "var(--text-3)" }}>In development</div>}
+                    {canAccess && <div style={{ marginTop: 14, fontSize: 12, fontWeight: 600, color: "var(--steel)" }}>Open &rarr;</div>}
+                    {comingSoon && <div style={{ marginTop: 14, fontSize: 12, fontWeight: 600, color: "var(--text-3)" }}>In development</div>}
                   </div>
                 );
               })}

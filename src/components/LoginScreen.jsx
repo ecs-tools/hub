@@ -1,30 +1,44 @@
 /**
  * LoginScreen.jsx
  * ─────────────────────────────────────────────────────────────────────────────
- * Full-screen login/registration card shown when the user is not authenticated.
+ * Split-panel sign-in (CONSOLIDATION_PLAN §6): navy brand panel + flat form.
+ * No gradients, blobs, or glow — this should read like a product, not a demo.
+ * Renders standalone (GlobalStyles isn't mounted pre-auth), so its layout CSS
+ * lives in the local <style> block below. Fonts come from the app bundle
+ * (@fontsource IBM Plex imports in main.jsx).
  *
- * Props:
- *   LOGO              — base64 logo data URI
- *   showRegister      — bool: show registration tab instead of login
- *   setShowRegister   — fn(bool)
- *   loginUsername / setLoginUsername
- *   loginPassword / setLoginPassword
- *   loginError
- *   onLogin           — fn() — called on form submit
- *   regInviteCode / setRegInviteCode
- *   regCenter / setRegCenter
- *   regUsername / setRegUsername
- *   regPassword / setRegPassword
- *   regConfirm / setRegConfirm
- *   regError
- *   regLoading
- *   regSuccess        — string: "account created, awaiting approval" banner
- *   setRegSuccess     — fn(string)
- *   onRegister        — fn() — called on registration form submit
+ * Props (all state lives in hooks/useAuth.js):
+ *   LOGO — base64 logo data URI
+ *   showRegister / setShowRegister
+ *   loginUsername/setLoginUsername · loginPassword/setLoginPassword
+ *   loginError · onLogin
+ *   regInviteCode/setRegInviteCode · regCenter/setRegCenter
+ *   regUsername/setRegUsername · regPassword/setRegPassword
+ *   regConfirm/setRegConfirm · regError · regLoading
+ *   regSuccess/setRegSuccess — "account created, awaiting approval" banner
+ *   onRegister
  */
 
 import React from "react";
 import { CENTERS } from "../config/centers.js";
+
+const NAVY = "#1a2d4d";
+
+const field = {
+  label: { display: "block", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.8px", color: "#6b6b6b", marginBottom: 6 },
+  input: { width: "100%", boxSizing: "border-box", background: "#fff", border: "1px solid #d9d9d6", borderRadius: 6, padding: "10px 12px", fontSize: 14, fontFamily: "inherit", color: "#1a1a1a", outline: "none", marginBottom: 16 },
+};
+
+function Field({ label, error, children }) {
+  return (
+    <div>
+      <label style={field.label}>{label}</label>
+      {React.cloneElement(children, {
+        style: { ...field.input, ...(error ? { borderColor: "#f0a9a3", background: "#fffafa" } : {}), ...children.props.style },
+      })}
+    </div>
+  );
+}
 
 export default function LoginScreen({
   LOGO,
@@ -44,143 +58,140 @@ export default function LoginScreen({
   regSuccess, setRegSuccess,
   onRegister,
 }) {
+  const submitBtn = (labelText, disabled) => (
+    <button type="submit" disabled={disabled}
+      style={{ width: "100%", background: disabled ? "#8a97ab" : NAVY, color: "#fff", border: "none", borderRadius: 6, padding: "11px", fontSize: 14, fontWeight: 600, cursor: disabled ? "default" : "pointer", fontFamily: "inherit", letterSpacing: "0.2px" }}>
+      {labelText}
+    </button>
+  );
+
   return (
-    <div style={{
-      minHeight: "100vh",
-      background: "linear-gradient(135deg, #0f172a 0%, #1a3a6b 55%, #0f172a 100%)",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      fontFamily: "'DM Sans', 'Segoe UI', sans-serif",
-      position: "relative", overflow: "hidden",
-    }}>
-      {/* Decorative background blobs */}
-      <div style={{ position: "absolute", width: 500, height: 500, borderRadius: "50%", background: "rgba(59,130,246,0.07)", top: -150, right: -150, pointerEvents: "none" }} />
-      <div style={{ position: "absolute", width: 350, height: 350, borderRadius: "50%", background: "rgba(99,179,237,0.06)", bottom: -100, left: -100, pointerEvents: "none" }} />
-      <div style={{ position: "absolute", width: 180, height: 180, borderRadius: "50%", background: "rgba(147,197,253,0.05)", top: "38%", left: "12%", pointerEvents: "none" }} />
-      <div style={{ position: "absolute", width: 120, height: 120, borderRadius: "50%", background: "rgba(59,130,246,0.06)", bottom: "25%", right: "14%", pointerEvents: "none" }} />
+    <div className="login-root" style={{ minHeight: "100vh", display: "flex", fontFamily: "'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif" }}>
+      <style>{`
+        .login-root { flex-wrap: wrap; }
+        .login-brand { background: ${NAVY}; color: #fff; flex: 1 1 340px; display: flex; flex-direction: column; justify-content: space-between; padding: 44px 48px; }
+        .login-form-panel { background: #f7f7f5; flex: 1.4 1 380px; display: flex; align-items: center; justify-content: center; padding: 48px 24px; }
+        .login-root input:focus, .login-root select:focus { border-color: #4a7ab5 !important; box-shadow: 0 0 0 3px rgba(74,122,181,0.15); }
+        @media (max-width: 860px) {
+          .login-brand { flex-direction: row; align-items: center; justify-content: flex-start; gap: 14px; padding: 18px 24px; }
+          .login-brand .brand-mid, .login-brand .brand-foot { display: none; }
+        }
+      `}</style>
 
-      {/* Card */}
-      <div style={{
-        background: "white", borderRadius: 20, border: "1px solid rgba(226,232,240,0.8)",
-        padding: "44px 40px 36px", width: "100%", maxWidth: 420,
-        boxShadow: "0 30px 80px rgba(0,0,0,0.45)", textAlign: "center",
-        position: "relative", zIndex: 1,
-      }}>
-        {/* Logo + branding */}
-        <img src={LOGO} alt="ECS" style={{ width: 68, height: 68, borderRadius: 16, marginBottom: 14, boxShadow: "0 4px 20px rgba(0,0,0,0.15)" }} />
-        <div style={{ fontSize: 26, fontWeight: 800, color: "#0f172a", letterSpacing: "-0.5px", marginBottom: 4 }}>ECS Hub</div>
-        <div style={{ fontSize: 13, color: "#64748b", marginBottom: 28 }}>Empowered Community Services</div>
+      {/* Brand panel */}
+      <div className="login-brand">
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <img src={LOGO} alt="" style={{ width: 34, height: 34, borderRadius: 6 }} />
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.3px", lineHeight: 1.1 }}>ECS Hub</div>
+            <div style={{ fontSize: 11, color: "#8fb3d4", letterSpacing: "0.4px" }}>Internal operations platform</div>
+          </div>
+        </div>
 
-        {!showRegister ? (
-          <>
-            {regSuccess && (
-              <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", borderRadius: 10, padding: "12px 14px", fontSize: 13, textAlign: "left", marginBottom: 18, lineHeight: 1.5 }}>
-                <strong>Account created.</strong> {regSuccess.replace(/^Account created\.\s*/, "")}
-                <button
-                  onClick={() => setRegSuccess("")}
-                  style={{ background: "none", border: "none", color: "#166534", fontSize: 12, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline", padding: 0, marginTop: 6, display: "block" }}
-                >
-                  Dismiss
+        <div className="brand-mid" style={{ maxWidth: 380 }}>
+          <div style={{ width: 34, height: 2, background: "#4a7ab5", marginBottom: 18 }} />
+          <div style={{ fontSize: 22, fontWeight: 600, lineHeight: 1.35, letterSpacing: "-0.2px" }}>
+            Billing, invoicing, funding, and fleet — one place of work.
+          </div>
+          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.55)", marginTop: 14, lineHeight: 1.6 }}>
+            Weekly pipelines land the data. You review, invoice, and resolve — here.
+          </div>
+        </div>
+
+        <div className="brand-foot" style={{ fontSize: 11, letterSpacing: "1.2px", textTransform: "uppercase", color: "rgba(255,255,255,0.45)" }}>
+          Empowered Community Services · © {new Date().getFullYear()}
+        </div>
+      </div>
+
+      {/* Form panel */}
+      <div className="login-form-panel">
+        <div style={{ width: "100%", maxWidth: 360 }}>
+          {!showRegister ? (
+            <>
+              <div style={{ fontSize: 21, fontWeight: 700, color: "#1a1a1a", letterSpacing: "-0.3px", marginBottom: 4 }}>Sign in</div>
+              <div style={{ fontSize: 13, color: "#6b6b6b", marginBottom: 26 }}>Use your ECS Hub account.</div>
+
+              {regSuccess && (
+                <div style={{ background: "#f2f9f4", border: "1px solid #bfe0c8", color: "#1e6b34", borderRadius: 6, padding: "11px 13px", fontSize: 13, lineHeight: 1.5, marginBottom: 18 }}>
+                  <strong>Account created.</strong> {regSuccess.replace(/^Account created\.\s*/, "")}
+                  <button onClick={() => setRegSuccess("")}
+                    style={{ background: "none", border: "none", color: "#1e6b34", fontSize: 12, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline", padding: 0, display: "block", marginTop: 6 }}>
+                    Dismiss
+                  </button>
+                </div>
+              )}
+
+              <form onSubmit={e => { e.preventDefault(); onLogin(); }}>
+                <Field label="Username" error={!!loginError}>
+                  <input type="text" name="username" value={loginUsername}
+                    onChange={e => setLoginUsername(e.target.value)}
+                    autoFocus autoComplete="username" placeholder="username" />
+                </Field>
+                <Field label="Password" error={!!loginError}>
+                  <input type="password" name="password" value={loginPassword}
+                    onChange={e => setLoginPassword(e.target.value)}
+                    autoComplete="current-password" placeholder="••••••••" />
+                </Field>
+                {loginError && <div style={{ fontSize: 13, color: "#b42318", marginBottom: 14, lineHeight: 1.45 }}>{loginError}</div>}
+                {submitBtn("Sign in", false)}
+              </form>
+
+              <div style={{ marginTop: 20, fontSize: 13, color: "#6b6b6b" }}>
+                New here?{" "}
+                <button onClick={() => setShowRegister(true)}
+                  style={{ background: "none", border: "none", color: "#2c5c94", fontSize: 13, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline", padding: 0 }}>
+                  Create an account with an invite code
                 </button>
               </div>
-            )}
-            <form onSubmit={e => { e.preventDefault(); onLogin(); }} style={{ textAlign: "left" }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Username</label>
-              <input
-                type="text" name="username"
-                value={loginUsername}
-                onChange={e => { setLoginUsername(e.target.value); }}
-                placeholder="Enter your username"
-                autoFocus autoComplete="username"
-                style={{ width: "100%", border: `1.5px solid ${loginError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: loginError ? "#fff8f8" : "#f8fafc", outline: "none", boxSizing: "border-box" }}
-              />
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Password</label>
-              <input
-                type="password" name="password"
-                value={loginPassword}
-                onChange={e => { setLoginPassword(e.target.value); }}
-                placeholder="Enter your password"
-                autoComplete="current-password"
-                style={{ width: "100%", border: `1.5px solid ${loginError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 10, background: loginError ? "#fff8f8" : "#f8fafc", outline: "none", boxSizing: "border-box" }}
-              />
-              {loginError && <div style={{ fontSize: 12, color: "#dc2626", marginBottom: 10 }}>{loginError}</div>}
-              <button
-                type="submit"
-                style={{ width: "100%", background: "linear-gradient(135deg, #3b82f6, #1d4ed8)", color: "white", border: "none", borderRadius: 10, padding: "13px", fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 14px rgba(59,130,246,0.4)", marginTop: 4 }}
-              >
-                Sign In
-              </button>
-            </form>
-            <div style={{ marginTop: 16, textAlign: "center" }}>
-              <button
-                onClick={() => setShowRegister(true)}
-                style={{ background: "none", border: "none", color: "#3b82f6", fontSize: 13, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}
-              >
-                First time? Create your account
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>Create Your Account</div>
-            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 20 }}>Enter the one-time invite code from your administrator. After you sign up, an admin approves your account before you can sign in.</div>
-            <form onSubmit={e => { e.preventDefault(); onRegister(); }} style={{ textAlign: "left" }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Invite Code</label>
-              <input
-                type="password" value={regInviteCode}
-                onChange={e => { setRegInviteCode(e.target.value); }}
-                placeholder="Enter invite code"
-                autoFocus autoComplete="off"
-                style={{ width: "100%", border: `1.5px solid ${regError && !regUsername ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: "#f8fafc", outline: "none", boxSizing: "border-box" }}
-              />
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Your Center</label>
-              <select
-                value={regCenter} onChange={e => { setRegCenter(e.target.value); }}
-                style={{ width: "100%", border: `1.5px solid ${regError && !regCenter ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: "#f8fafc", outline: "none", boxSizing: "border-box", color: regCenter ? "#1e293b" : "#94a3b8" }}
-              >
-                <option value="">Select your center...</option>
-                {CENTERS.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Choose a Username</label>
-              <input
-                type="text" name="username" value={regUsername}
-                onChange={e => { setRegUsername(e.target.value); }}
-                placeholder="e.g. sarah_jones" autoComplete="username"
-                style={{ width: "100%", border: `1.5px solid ${regError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: "#f8fafc", outline: "none", boxSizing: "border-box" }}
-              />
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Choose a Password</label>
-              <input
-                type="password" name="new-password" value={regPassword}
-                onChange={e => { setRegPassword(e.target.value); }}
-                placeholder="At least 8 characters" autoComplete="new-password"
-                style={{ width: "100%", border: `1.5px solid ${regError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 12, background: "#f8fafc", outline: "none", boxSizing: "border-box" }}
-              />
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Confirm Password</label>
-              <input
-                type="password" value={regConfirm}
-                onChange={e => { setRegConfirm(e.target.value); }}
-                placeholder="Re-enter your password" autoComplete="new-password"
-                style={{ width: "100%", border: `1.5px solid ${regError ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, marginBottom: 10, background: "#f8fafc", outline: "none", boxSizing: "border-box" }}
-              />
-              {regError && <div style={{ fontSize: 12, color: "#dc2626", marginBottom: 10 }}>{regError}</div>}
-              <button
-                type="submit" disabled={regLoading}
-                style={{ width: "100%", background: regLoading ? "#93c5fd" : "linear-gradient(135deg, #3b82f6, #1d4ed8)", color: "white", border: "none", borderRadius: 10, padding: "13px", fontSize: 15, fontWeight: 700, cursor: regLoading ? "default" : "pointer", boxShadow: "0 4px 14px rgba(59,130,246,0.4)", marginTop: 4 }}
-              >
-                {regLoading ? "Creating account…" : "Create Account"}
-              </button>
-            </form>
-            <div style={{ marginTop: 16, textAlign: "center" }}>
-              <button
-                onClick={() => { setShowRegister(false); }}
-                style={{ background: "none", border: "none", color: "#64748b", fontSize: 13, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}
-              >
-                ← Back to Sign In
-              </button>
-            </div>
-          </>
-        )}
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 21, fontWeight: 700, color: "#1a1a1a", letterSpacing: "-0.3px", marginBottom: 4 }}>Create your account</div>
+              <div style={{ fontSize: 13, color: "#6b6b6b", marginBottom: 26, lineHeight: 1.5 }}>
+                Enter the one-time invite code from your administrator. An admin approves the account before your first sign-in.
+              </div>
 
-        <div style={{ marginTop: 24, fontSize: 11, color: "#94a3b8" }}>Empowered Community Services © 2025</div>
+              <form onSubmit={e => { e.preventDefault(); onRegister(); }}>
+                <Field label="Invite code" error={!!regError && !regUsername}>
+                  <input type="password" value={regInviteCode}
+                    onChange={e => setRegInviteCode(e.target.value)}
+                    autoFocus autoComplete="off" placeholder="ECS-•••••-••••" />
+                </Field>
+                <Field label="Your center" error={!!regError && !regCenter}>
+                  <select value={regCenter} onChange={e => setRegCenter(e.target.value)}
+                    style={{ color: regCenter ? "#1a1a1a" : "#9b9a97" }}>
+                    <option value="">Select your center…</option>
+                    {CENTERS.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </Field>
+                <Field label="Username" error={!!regError}>
+                  <input type="text" name="username" value={regUsername}
+                    onChange={e => setRegUsername(e.target.value)}
+                    autoComplete="username" placeholder="e.g. sarah_jones" />
+                </Field>
+                <Field label="Password" error={!!regError}>
+                  <input type="password" name="new-password" value={regPassword}
+                    onChange={e => setRegPassword(e.target.value)}
+                    autoComplete="new-password" placeholder="At least 8 characters" />
+                </Field>
+                <Field label="Confirm password" error={!!regError}>
+                  <input type="password" value={regConfirm}
+                    onChange={e => setRegConfirm(e.target.value)}
+                    autoComplete="new-password" placeholder="Re-enter your password" />
+                </Field>
+                {regError && <div style={{ fontSize: 13, color: "#b42318", marginBottom: 14, lineHeight: 1.45 }}>{regError}</div>}
+                {submitBtn(regLoading ? "Creating account…" : "Create account", regLoading)}
+              </form>
+
+              <div style={{ marginTop: 20 }}>
+                <button onClick={() => setShowRegister(false)}
+                  style={{ background: "none", border: "none", color: "#6b6b6b", fontSize: 13, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline", padding: 0 }}>
+                  ← Back to sign in
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

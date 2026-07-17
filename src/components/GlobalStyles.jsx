@@ -3,11 +3,16 @@
 export default function GlobalStyles() {
   return (
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
-        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap');
         *, *::before, *::after { box-sizing: border-box; }
-        body { margin: 0; }
+        body { margin: 0; font-family: var(--font-sans); color: var(--text-1); }
+        /* Numbers are the product: keep digits column-aligned everywhere. */
+        table, td, th { font-variant-numeric: tabular-nums; }
+        .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.2px; }
         :root {
+          --font-sans: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+          --font-mono: 'IBM Plex Mono', Consolas, monospace;
+          --radius: 8px;
+          --radius-sm: 6px;
           --bg: #ffffff;
           --bg-soft: #f7f7f5;
           --bg-hover: #f1f1ef;
@@ -38,10 +43,10 @@ export default function GlobalStyles() {
         .nav-item { display: block; width: 100%; text-align: left; border: none; border-radius: 6px; padding: 8px 12px; margin-bottom: 1px; font-size: 13px; font-family: inherit; cursor: pointer; transition: background 0.1s, color 0.1s; background: none; color: rgba(255,255,255,0.65); font-weight: 400; }
         .nav-item:hover { background: rgba(255,255,255,0.08); color: #fff; }
         .nav-item.active { background: rgba(255,255,255,0.14); color: #fff; font-weight: 600; }
-        .mod-card { border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px; background: var(--bg); position: relative; cursor: pointer; transition: box-shadow 0.15s, border-color 0.15s; }
-        .mod-card:hover { box-shadow: 0 2px 14px rgba(26,45,77,0.1); border-color: var(--powder); }
-        .mod-card.locked { cursor: default; opacity: 0.75; }
-        .mod-card.locked:hover { box-shadow: none; border-color: var(--border); }
+        .mod-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; background: var(--bg); position: relative; cursor: pointer; transition: border-color 0.15s, transform 0.15s; }
+        .mod-card:hover { border-color: var(--steel); transform: translateY(-1px); }
+        .mod-card.locked { cursor: default; opacity: 0.7; }
+        .mod-card.locked:hover { border-color: var(--border); transform: none; }
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #d4d4d2; border-radius: 3px; }
