@@ -18,6 +18,8 @@
  *   regConfirm / setRegConfirm
  *   regError
  *   regLoading
+ *   regSuccess        — string: "account created, awaiting approval" banner
+ *   setRegSuccess     — fn(string)
  *   onRegister        — fn() — called on registration form submit
  */
 
@@ -39,6 +41,7 @@ export default function LoginScreen({
   regConfirm, setRegConfirm,
   regError,
   regLoading,
+  regSuccess, setRegSuccess,
   onRegister,
 }) {
   return (
@@ -69,6 +72,17 @@ export default function LoginScreen({
 
         {!showRegister ? (
           <>
+            {regSuccess && (
+              <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", borderRadius: 10, padding: "12px 14px", fontSize: 13, textAlign: "left", marginBottom: 18, lineHeight: 1.5 }}>
+                <strong>Account created.</strong> {regSuccess.replace(/^Account created\.\s*/, "")}
+                <button
+                  onClick={() => setRegSuccess("")}
+                  style={{ background: "none", border: "none", color: "#166534", fontSize: 12, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline", padding: 0, marginTop: 6, display: "block" }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
             <form onSubmit={e => { e.preventDefault(); onLogin(); }} style={{ textAlign: "left" }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Username</label>
               <input
@@ -108,7 +122,7 @@ export default function LoginScreen({
         ) : (
           <>
             <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>Create Your Account</div>
-            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 20 }}>Enter the invite code from your manager, then pick a username and password.</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 20 }}>Enter the one-time invite code from your administrator. After you sign up, an admin approves your account before you can sign in.</div>
             <form onSubmit={e => { e.preventDefault(); onRegister(); }} style={{ textAlign: "left" }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 5 }}>Invite Code</label>
               <input

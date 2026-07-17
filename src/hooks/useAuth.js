@@ -28,6 +28,10 @@ export default function useAuth(onSessionEnd) {
   const [regCenter, setRegCenter] = useState("");
   const [regError, setRegError] = useState("");
   const [regLoading, setRegLoading] = useState(false);
+  // Set after a successful registration: accounts now start "pending" and
+  // can't sign in until an admin approves them, so instead of auto-login we
+  // show this message on the login card.
+  const [regSuccess, setRegSuccess] = useState("");
 
   // Keep the latest callback in a ref so the inactivity effect only re-runs
   // when auth state or role changes, not on every render of the caller.
@@ -106,7 +110,10 @@ export default function useAuth(onSessionEnd) {
         setLoginUsername("");
         setLoginPassword("");
       } else {
-        setLoginError("Incorrect username or password. Try again.");
+        // Surface the server's reason — "awaiting approval" and "too many
+        // attempts" need different words than a wrong password.
+        const data = await res.json().catch(() => null);
+        setLoginError(data?.detail || "Incorrect username or password. Try again.");
       }
     } catch {
       setLoginError("Could not reach the server. Check your connection.");
@@ -129,10 +136,11 @@ export default function useAuth(onSessionEnd) {
       });
       const data = await res.json();
       if (res.ok) {
-        setIsAuthenticated(true);
-        setUserRole(data.role || "staff");
-        setUserPermissions(data.permissions || {});
+        // No auto-login anymore: the account is pending admin approval.
+        setRegSuccess(data.detail || "Account created. An administrator must approve it before you can sign in.");
         setShowRegister(false);
+        setRegInviteCode(""); setRegUsername(""); setRegPassword("");
+        setRegConfirm(""); setRegCenter("");
       } else {
         setRegError(data.detail || "Registration failed. Try again.");
       }
@@ -150,6 +158,7 @@ export default function useAuth(onSessionEnd) {
     regInviteCode, setRegInviteCode, regUsername, setRegUsername,
     regPassword, setRegPassword, regConfirm, setRegConfirm,
     regCenter, setRegCenter, regError, setRegError, regLoading,
+    regSuccess, setRegSuccess,
     handleLogin, handleRegister, handleLogout,
   };
 }

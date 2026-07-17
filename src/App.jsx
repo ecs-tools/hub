@@ -92,6 +92,8 @@ export default function App() {
         regConfirm={auth.regConfirm} setRegConfirm={v => { auth.setRegConfirm(v); auth.setRegError(""); }}
         regError={auth.regError}
         regLoading={auth.regLoading}
+        regSuccess={auth.regSuccess}
+        setRegSuccess={auth.setRegSuccess}
         onRegister={auth.handleRegister}
       />
     );

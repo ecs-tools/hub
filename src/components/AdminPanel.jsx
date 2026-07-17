@@ -11,6 +11,13 @@ function AdminPanel({ apiBase, modules }) {
   const [resetPw, setResetPw] = useState("");
   const [resetSaving, setResetSaving] = useState(false);
 
+  // Invite codes (single-use, expiring — replaces the old shared code)
+  const [invites, setInvites] = useState([]);
+  const [inviteDays, setInviteDays] = useState(7);
+  const [inviteCreating, setInviteCreating] = useState(false);
+  const [newInvite, setNewInvite] = useState(null); // {code, expires_at} — shown ONCE
+  const [showAllInvites, setShowAllInvites] = useState(false);
+
   const showToast = (msg, ok = true) => {
     setToast({ msg, ok });
     setTimeout(() => setToast(null), 2500);
@@ -23,14 +30,56 @@ function AdminPanel({ apiBase, modules }) {
   };
 
   const fetchUsers = () => {
-    setLoading(true);
+    // loading starts true; only ever flips false here (fetchUsers runs on mount)
     fetch(`${apiBase}/admin/users`, { credentials: "include" })
       .then(r => r.json())
       .then(data => { setUsers(Array.isArray(data) ? data : []); setLoading(false); })
       .catch(() => { showToast("Failed to load users", false); setLoading(false); });
   };
 
-  useEffect(() => { fetchUsers(); }, []);
+  const fetchInvites = () => {
+    fetch(`${apiBase}/admin/invites`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => setInvites(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  };
+
+  useEffect(() => { fetchUsers(); fetchInvites(); }, []);
+
+  const createInvite = async () => {
+    setInviteCreating(true);
+    const res = await fetch(`${apiBase}/admin/invites`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expires_days: inviteDays }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setNewInvite(data);   // plaintext code — the server never shows it again
+      fetchInvites();
+    } else { showToast(await detailOf(res, "Failed to create invite"), false); }
+    setInviteCreating(false);
+  };
+
+  const revokeInvite = async (id) => {
+    const res = await fetch(`${apiBase}/admin/invites/${id}`, {
+      method: "DELETE", credentials: "include",
+    });
+    if (res.ok) { showToast("Invite revoked"); fetchInvites(); }
+    else { showToast(await detailOf(res, "Failed to revoke invite"), false); }
+  };
+
+  const approveUser = async (username) => {
+    setSaving(s => ({ ...s, [username]: true }));
+    const res = await fetch(`${apiBase}/admin/users/${username}/approve`, {
+      method: "POST", credentials: "include",
+    });
+    if (res.ok) {
+      setUsers(prev => prev.map(u => u.username === username ? { ...u, status: "active" } : u));
+      showToast(`${username} approved — they can now sign in`);
+    } else { showToast(await detailOf(res, "Failed to approve user"), false); }
+    setSaving(s => ({ ...s, [username]: false }));
+  };
 
   const setRole = async (username, role) => {
     setSaving(s => ({ ...s, [username]: true }));
@@ -150,12 +199,84 @@ function AdminPanel({ apiBase, modules }) {
           { label: "Admins", value: users.filter(u => u.role === "admin").length },
           { label: "Managers", value: users.filter(u => u.role === "manager").length },
           { label: "Staff", value: users.filter(u => u.role === "staff").length },
+          { label: "Pending Approval", value: users.filter(u => u.status === "pending").length, alert: users.some(u => u.status === "pending") },
         ].map(s => (
-          <div key={s.label} style={{ background: "white", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 20px", minWidth: 110 }}>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "var(--navy)" }}>{s.value}</div>
-            <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 2 }}>{s.label}</div>
+          <div key={s.label} style={{ background: s.alert ? "#fffbeb" : "white", border: `1px solid ${s.alert ? "#fde68a" : "var(--border)"}`, borderRadius: 10, padding: "14px 20px", minWidth: 110 }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: s.alert ? "#92400e" : "var(--navy)" }}>{s.value}</div>
+            <div style={{ fontSize: 12, color: s.alert ? "#92400e" : "var(--text-2)", marginTop: 2 }}>{s.label}</div>
           </div>
         ))}
+      </div>
+
+      {/* Invite codes — single-use, expiring; replaces the old shared code */}
+      <div style={{ background: "white", border: "1px solid var(--border)", borderRadius: 12, padding: "18px 20px", marginBottom: 28 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "var(--navy)" }}>Invite Codes</div>
+            <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 2 }}>
+              Each code works once, then dies. New accounts still wait for your approval below.
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <select value={inviteDays} onChange={e => setInviteDays(Number(e.target.value))}
+              style={{ border: "1.5px solid var(--border)", borderRadius: 6, padding: "7px 10px", fontSize: 12, fontFamily: "inherit", outline: "none" }}>
+              <option value={3}>Expires in 3 days</option>
+              <option value={7}>Expires in 7 days</option>
+              <option value={14}>Expires in 14 days</option>
+            </select>
+            <button onClick={createInvite} disabled={inviteCreating}
+              style={{ background: "var(--navy)", color: "white", border: "none", borderRadius: 6, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+              {inviteCreating ? "Generating…" : "Generate invite"}
+            </button>
+          </div>
+        </div>
+
+        {newInvite && (
+          <div style={{ marginTop: 14, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "12px 14px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <code style={{ fontSize: 16, fontWeight: 700, letterSpacing: "1px", color: "#166534" }}>{newInvite.code}</code>
+            <button onClick={() => { navigator.clipboard?.writeText(newInvite.code); showToast("Invite code copied"); }}
+              style={{ background: "white", border: "1px solid #bbf7d0", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 600, color: "#166534", cursor: "pointer", fontFamily: "inherit" }}>
+              Copy
+            </button>
+            <span style={{ fontSize: 12, color: "#166534" }}>
+              Share it privately — this is the only time it's shown.
+            </span>
+            <button onClick={() => setNewInvite(null)}
+              style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 12, color: "#166534", cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}>
+              Done
+            </button>
+          </div>
+        )}
+
+        {invites.length > 0 && (
+          <div style={{ marginTop: 14 }}>
+            {(showAllInvites ? invites : invites.filter(i => i.status === "active")).map(inv => (
+              <div key={inv.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "7px 0", borderTop: "1px solid var(--bg-hover)", fontSize: 12, flexWrap: "wrap" }}>
+                <code style={{ color: "var(--text-1)", minWidth: 130 }}>{inv.hint}</code>
+                <span style={{
+                  fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.5px", padding: "2px 8px", borderRadius: 4,
+                  background: inv.status === "active" ? "#dcfce7" : inv.status === "used" ? "#dbeafe" : "var(--bg-soft)",
+                  color: inv.status === "active" ? "#166534" : inv.status === "used" ? "#1e40af" : "var(--text-3)",
+                }}>{inv.status}</span>
+                <span style={{ color: "var(--text-2)" }}>
+                  {inv.status === "used" && inv.used_by
+                    ? `used by ${inv.used_by}`
+                    : `expires ${inv.expires_at ? new Date(inv.expires_at).toLocaleDateString() : "—"}`}
+                </span>
+                {inv.status === "active" && (
+                  <button onClick={() => revokeInvite(inv.id)}
+                    style={{ marginLeft: "auto", background: "none", border: "1px solid #fca5a5", borderRadius: 6, padding: "3px 10px", fontSize: 11, color: "#dc2626", cursor: "pointer", fontFamily: "inherit" }}>
+                    Revoke
+                  </button>
+                )}
+              </div>
+            ))}
+            <button onClick={() => setShowAllInvites(v => !v)}
+              style={{ marginTop: 8, background: "none", border: "none", fontSize: 12, color: "var(--accent)", cursor: "pointer", fontFamily: "inherit", textDecoration: "underline", padding: 0 }}>
+              {showAllInvites ? "Show active only" : `Show all (${invites.length})`}
+            </button>
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -181,7 +302,14 @@ function AdminPanel({ apiBase, modules }) {
 
                 {/* User info */}
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: "var(--navy)" }}>{user.username}</div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: "var(--navy)", display: "flex", alignItems: "center", gap: 8 }}>
+                    {user.username}
+                    {user.status === "pending" && (
+                      <span style={{ fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.5px", padding: "2px 8px", borderRadius: 4, background: "#fffbeb", color: "#92400e", border: "1px solid #fde68a" }}>
+                        Pending
+                      </span>
+                    )}
+                  </div>
                   <div style={{ fontSize: 11, color: "var(--text-2)", marginTop: 2 }}>Joined {joinDate}</div>
                 </div>
 
@@ -229,6 +357,16 @@ function AdminPanel({ apiBase, modules }) {
 
                 {/* Row actions */}
                 <div style={{ paddingTop: 2, display: "flex", flexDirection: "column", gap: 6 }}>
+                  {user.status === "pending" && (
+                    <button
+                      onClick={() => approveUser(user.username)}
+                      disabled={saving[user.username]}
+                      title="Approve this account so they can sign in"
+                      style={{ background: "#166534", color: "white", border: "none", borderRadius: 6, padding: "5px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}
+                    >
+                      {saving[user.username] ? "Approving…" : "Approve"}
+                    </button>
+                  )}
                   <button
                     onClick={() => { setResetModal(user.username); setResetPw(""); }}
                     title="Set a new password for this user"
