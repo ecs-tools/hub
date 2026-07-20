@@ -211,7 +211,7 @@ export default function App() {
               </div>
               {tracker.lastUpdated && (
                 <div style={{ fontSize: 11, color: "var(--text-3)" }}>
-                  Updated {new Date(tracker.lastUpdated).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                  Updated {new Date(tracker.lastUpdated).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
                 </div>
               )}
             </div>
