@@ -77,6 +77,27 @@ export function categorizeReason(reason) {
   return "Other";
 }
 
+// ISO week label ("2026-W29") for a date — mirrors the pipeline uploader's
+// week_label_for; keep in sync.
+export function isoWeekLabel(date) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7) + 3); // ISO week's Thursday
+  const year = d.getUTCFullYear();
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const week = 1 + Math.round(((d - jan4) / 86400000 - 3 + ((jan4.getUTCDay() + 6) % 7)) / 7);
+  return `${year}-W${String(week).padStart(2, "0")}`;
+}
+
+// The billing week currently being WORKED: the most recently completed
+// Mon–Sun week (what the live error set covers). Errors from this week are
+// never "carryover" — they're this week's work (Brock 2026-07-20).
+export function workWeekLabel(today = new Date()) {
+  const dow = (today.getDay() + 6) % 7;              // Mon=0 … Sun=6
+  const lastSunday = new Date(today);
+  lastSunday.setDate(today.getDate() - dow - 1);
+  return isoWeekLabel(lastSunday);
+}
+
 // YYYY-MM-DD → MM/DD/YYYY for display; anything else passes through.
 export function formatDate(d) {
   if (!d) return "";

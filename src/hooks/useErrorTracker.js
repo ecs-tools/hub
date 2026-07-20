@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { API_BASE } from "../config/api.js";
 import { CENTERS } from "../config/centers.js";
-import { makeKey, assignRowKeys, centerName } from "../utils/tracker.js";
+import { makeKey, assignRowKeys, centerName, workWeekLabel } from "../utils/tracker.js";
 
 // All state and data flow for the billing-error tracker: the live week's rows,
 // the year backlog, per-row manager statuses/notes/flags (with race-safe
@@ -32,14 +32,21 @@ export default function useErrorTracker(isAuthenticated, showToast) {
   // ── Tracker datasets ─────────────────────────────────────────────────────────
   // This Week = the live working set (replaced by each pipeline upload).
   // Backlog   = every 2026 error ever uploaded (error_history; never deleted).
-  // Carryover = backlog rows that aged out of the live set (their week's
-  //             Mon-Wed pipeline runs are over) without a manager resolving
-  //             them — i.e. "still not fixed by Wednesday".
+  // Carryover = backlog rows from weeks BEFORE the one currently being worked
+  //             that aged out of the live set without a manager resolving
+  //             them. The current working week is NEVER carryover (Brock
+  //             2026-07-20) — mid-week, rows drop out of the live set because
+  //             fiscal fixed them in Brittco (or logic changed), and calling
+  //             that "carryover" while managers are still working the week is
+  //             wrong. Rows only become carryover-eligible once billing moves
+  //             to the next week.
   // Statuses are keyed by row content, so one status map serves all views.
   const liveKeys = useMemo(() => new Set(rawData.map(r => r._key)), [rawData]);
+  const workWeek = workWeekLabel();
   const carryoverRows = useMemo(
-    () => history.filter(r => !liveKeys.has(r._key) && !["fixed", "disputed"].includes(statuses[r._key])),
-    [history, liveKeys, statuses]
+    () => history.filter(r => r.week < workWeek && !liveKeys.has(r._key)
+      && !["fixed", "disputed"].includes(statuses[r._key])),
+    [history, liveKeys, statuses, workWeek]
   );
   const activeData = trackerView === "backlog" ? history : trackerView === "carryover" ? carryoverRows : rawData;
 
