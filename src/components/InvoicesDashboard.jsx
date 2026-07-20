@@ -17,7 +17,7 @@ import Icon from "./Icon.jsx";
 
 const TOOLS = [
   { id: "ecs",    label: "ECS",               upload: "required", inputHint: "BillingByCostCenterDetail3 CSV" },
-  { id: "lorain", label: "Lorain",            upload: null },   // not yet runnable from the site (port pending)
+  { id: "lorain", label: "Lorain",            upload: "required", inputHint: "BillingByCostCenterDetail3 CSV (Lorain export) — output is one county workbook" },
   { id: "osl",    label: "OSL",               upload: "required", inputHint: "BillingByCostCenterDetail3 CSV (OSL export — ASA day counts)" },
   { id: "pl",     label: "Patient Liability", upload: "none",     inputHint: "Config-driven — no master file" },
   { id: "sos",    label: "SOS",               upload: "required", inputHint: "Month CSV" },
@@ -365,7 +365,7 @@ function DetailDrawer({ invoice, onClose }) {
           {invoice.has_pdf && (
             <a href={`${API_BASE}/api/invoices/${invoice.id}/pdf`} target="_blank" rel="noopener noreferrer"
               style={{ ...S.actionBtn, textDecoration: "none", display: "inline-block", marginBottom: 18 }}>
-              Open PDF
+              {invoice.tool === "lorain" ? "Open workbook" : "Open PDF"}
             </a>
           )}
 
@@ -497,8 +497,9 @@ function InvoiceRow({ inv, isAdmin, saving, onPay, onMarkSent, onDetail }) {
         <button style={{ ...S.actionBtn, marginRight: 6 }} onClick={() => onDetail(inv)}>Details</button>
         {inv.has_pdf ? (
           <a href={`${API_BASE}/api/invoices/${inv.id}/pdf`} target="_blank" rel="noopener noreferrer"
-            style={{ ...S.actionBtn, textDecoration: "none", display: "inline-block" }}>PDF</a>
-        ) : <span style={{ fontSize: 12, color: "var(--text-3)" }}>no PDF</span>}
+            style={{ ...S.actionBtn, textDecoration: "none", display: "inline-block" }}>
+            {inv.tool === "lorain" ? "Workbook" : "PDF"}</a>
+        ) : <span style={{ fontSize: 12, color: "var(--text-3)" }}>no file</span>}
       </td>
       {isAdmin && (
         <td style={{ ...S.td, whiteSpace: "nowrap" }}>
