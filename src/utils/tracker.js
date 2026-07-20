@@ -66,7 +66,7 @@ export function categorizeReason(reason) {
   if (!reason) return "Other";
   const r = String(reason).toLowerCase();
   if (r.includes("not found in attendance") || r.includes("transported but not found")) return "Not Found in Attendance";
-  if (r.includes("nmt without adult day")) return "Transport Violation";
+  if (r.includes("without adult day")) return "Transport Violation"; // NMT + (2026-07-20) any billing on a no-ADS day
   if (r.includes("units billed")) return "Invalid Units";
   if (r.includes("arrival time is before pickup") || r.includes("before pickup end")) return "Arrival Before Pickup";
   if (r.includes("bus ended") && r.includes("checked in")) return "Bus/Check-in Time Mismatch";
