@@ -1,16 +1,33 @@
-# React + Vite
+# ECS Hub
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Internal web app for Empowered Community Services — billing, funding and fleet
+operations. React + Vite, deployed to GitHub Pages.
 
-Currently, two official plugins are available:
+This is the **frontend only**. It holds no data and no business logic of its
+own: every screen reads an authenticated API, and unauthenticated visitors get
+nothing but the shell.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Develop
 
-## React Compiler
+```bash
+npm install
+npx vite --port 5173 --strictPort   # must be 5173 — the API's CORS allowlist is exact
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Deploy
 
-## Expanding the ESLint configuration
+```bash
+npm run deploy
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Publishing is a deliberate, manual step — pushing to `main` backs the source up
+but does **not** update the live site. After deploying, hard-refresh
+(Ctrl+Shift+R); a stale browser cache is the most common reason a change
+"didn't ship."
+
+## Notes
+
+- Anything prefixed `VITE_` is **baked into the public bundle** and visible in
+  DevTools. Never put a secret behind that prefix.
+- Framework filenames (`App.jsx`, `main.jsx`, `vite.config.js`) are kept as-is
+  on purpose — renaming them breaks imports and tooling.
