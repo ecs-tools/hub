@@ -31,8 +31,13 @@ export default function ErrorTracker({ tracker, onOpenNote }) {
   return (
     <div style={{ padding: "24px 32px" }}>
         {/* View switcher: This Week / Backlog / Carryover — visible to every
-            role since 2026-07-17. The server decides what each role's rows
-            contain: non-admins never receive transport/invalid-unit errors. */}
+            role since 2026-07-17. The server decides what each view contains;
+            there is no category gating in this component.
+            2026-07-21: staff now receive EVERY category in "This week".
+            Transport Violation and Invalid Units are excluded from Backlog and
+            Carryover for ALL roles — billing is blocked until they're fixed, so
+            they cannot legitimately carry over and only ever appeared there as
+            noise. They get worked in "This week". */}
         {history.length > 0 && (
           <div style={{ display: "inline-flex", background: "#f1f5f9", borderRadius: 10, padding: 3, marginBottom: 18, border: "1.5px solid #e2e8f0" }}>
             {[
