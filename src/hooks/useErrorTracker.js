@@ -10,7 +10,9 @@ import { makeKey, assignRowKeys, centerName, workWeekLabel } from "../utils/trac
 export default function useErrorTracker(isAuthenticated, showToast) {
   const [rawData, setRawData] = useState([]);
   const [history, setHistory] = useState([]);            // year backlog (staging.error_history)
-  const [trackerView, setTrackerView] = useState("week"); // week | backlog | carryover
+  const [outstanding, setOutstanding] = useState([]);    // open ISP goals (staging.outstanding_goals)
+  const [goalsMeta, setGoalsMeta] = useState(null);      // pull window + last-loaded stamp
+  const [trackerView, setTrackerView] = useState("week"); // week | backlog | carryover | goals
   const [selectedWeek, setSelectedWeek] = useState("All Weeks");
   const [selectedCenter, setSelectedCenter] = useState("All Centers");
   const [selectedCategory, setSelectedCategory] = useState("All Types");
@@ -102,6 +104,22 @@ export default function useErrorTracker(isAuthenticated, showToast) {
           }
         }
       } catch { /* history unavailable — weekly view still works */ }
+
+      // Outstanding ISP goals — its own weekly pull (outstanding_goals.py),
+      // independent of the error pipeline. Unlike the views above these rows
+      // carry no manager state: the list is rebuilt from Brittco each week and
+      // documented goals drop off by themselves. If the endpoint or the table
+      // isn't there yet, the tab just stays hidden.
+      try {
+        const gres = await fetch(`${API_BASE}/api/goals/outstanding`, { credentials: "include" });
+        if (gres.ok) {
+          const gdata = await gres.json();
+          if (gdata.ready && Array.isArray(gdata.rows)) {
+            setOutstanding(gdata.rows);
+            setGoalsMeta({ window: gdata.window, loaded_at: gdata.loaded_at });
+          }
+        }
+      } catch { /* outstanding goals unavailable — other views still work */ }
 
     setLoaded(true);
   }, []);
@@ -225,7 +243,7 @@ export default function useErrorTracker(isAuthenticated, showToast) {
   }, [rawData, statuses]);
 
   return {
-    rawData, history,
+    rawData, history, outstanding, goalsMeta,
     trackerView, setTrackerView,
     selectedWeek, setSelectedWeek,
     selectedCenter, setSelectedCenter,

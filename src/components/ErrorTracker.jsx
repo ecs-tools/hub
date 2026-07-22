@@ -1,5 +1,6 @@
 import React from "react";
 import { makeKey, centerName, progressColor, formatDate } from "../utils/tracker.js";
+import OutstandingGoals from "./OutstandingGoals.jsx";
 
 const STATUS_OPTIONS = [
   { value: "fixed", label: "Fixed", color: "#16a34a", bg: "#dcfce7", border: "#86efac" },
@@ -22,7 +23,8 @@ const CATEGORY_COLORS = {
 // component only renders what the hook returns.
 export default function ErrorTracker({ tracker, onOpenNote }) {
   const {
-    rawData, history, carryoverRows, trackerView, setTrackerView,
+    rawData, history, carryoverRows, outstanding, goalsMeta,
+    trackerView, setTrackerView,
     selectedWeek, setSelectedWeek, selectedCenter, setSelectedCenter,
     selectedCategory, setSelectedCategory, weeks, locations, categories,
     centerStats, stats, filtered, sortField, sortDir, handleSort,
@@ -38,12 +40,17 @@ export default function ErrorTracker({ tracker, onOpenNote }) {
             Carryover for ALL roles — billing is blocked until they're fixed, so
             they cannot legitimately carry over and only ever appeared there as
             noise. They get worked in "This week". */}
-        {history.length > 0 && (
+        {(history.length > 0 || outstanding.length > 0) && (
           <div style={{ display: "inline-flex", background: "#f1f5f9", borderRadius: 10, padding: 3, marginBottom: 18, border: "1.5px solid #e2e8f0" }}>
             {[
               { id: "week", label: "This Week", count: rawData.length },
               { id: "backlog", label: "Backlog 2026", count: history.length },
               { id: "carryover", label: "Carryover", count: carryoverRows.length },
+              // Separate pull, separate table, no manager state — see
+              // OutstandingGoals.jsx. Hidden until the loader has run once.
+              ...(outstanding.length > 0
+                ? [{ id: "goals", label: "Outstanding Goals", count: outstanding.length }]
+                : []),
             ].map(v => {
               const active = trackerView === v.id;
               const alert = v.id === "carryover" && v.count > 0;
@@ -65,6 +72,11 @@ export default function ErrorTracker({ tracker, onOpenNote }) {
             })}
           </div>
         )}
+
+        {trackerView === "goals" ? (
+          <OutstandingGoals rows={outstanding} meta={goalsMeta} />
+        ) : (
+          <>
 
         {/* Explainer line for the history views */}
         {trackerView !== "week" && (
@@ -242,6 +254,9 @@ export default function ErrorTracker({ tracker, onOpenNote }) {
             </table>
           </div>
         </div>
+
+          </>
+        )}
     </div>
   );
 }
