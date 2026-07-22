@@ -248,6 +248,7 @@ export default function App() {
         <ErrorBoundary moduleName="Error Tracker">
           <ErrorTracker
             tracker={tracker}
+            isAdmin={userRole === "admin"}
             onOpenNote={(key, note) => { setNoteModal({ key, note }); setNoteInput(note); }}
           />
         </ErrorBoundary>

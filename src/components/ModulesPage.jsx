@@ -24,9 +24,15 @@ export default function ModulesPage({ canAccessModule, onOpenModule }) {
       </p>
 
       {[...MODULE_CATEGORIES, "Other"].map(cat => {
+        // 2026-07-22 (Brock): modules you can't open are HIDDEN, not greyed out.
+        // They used to render as "Locked" cards at 70% opacity, which made the
+        // launcher look cluttered and advertised tools most people will never
+        // be given. Coming Soon cards stay — those are deliberate previews.
+        // A category whose modules are all hidden drops out entirely via the
+        // length check below, so no empty section headers appear.
         const mods = MODULES.filter(
           m => (MODULE_CATEGORIES.includes(m.category) ? m.category : "Other") === cat
-        );
+        ).filter(m => m.comingSoon || canAccessModule(m.id));
         if (!mods.length) return null;
         return (
           <div key={cat} style={{ marginBottom: 32 }}>
@@ -44,13 +50,15 @@ export default function ModulesPage({ canAccessModule, onOpenModule }) {
                     tabIndex={canAccess ? 0 : undefined}
                     onKeyDown={e => { if (canAccess && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); open(); } }}
                   >
-                    {comingSoon
-                      ? <span style={badge("#eef2ff", "#4f46e5")}>Coming Soon</span>
-                      : canAccess
-                        ? <span style={badge("#dcfce7", "#166534")}>Active</span>
-                        : <span style={badge("var(--bg-soft)", "var(--text-3)", true)}>Locked</span>}
+                    {/* "Locked" is gone with the filter above — nothing
+                        unreachable renders here now. "Active" went with it: if
+                        a card is on this page you can open it, so the badge was
+                        stating the obvious on every single tile. Only Coming
+                        Soon still carries a badge, because that one is real
+                        information. */}
+                    {comingSoon && <span style={badge("#eef2ff", "#4f46e5")}>Coming Soon</span>}
 
-                    <div style={{ fontSize: 16, fontWeight: 700, color: canAccess ? "var(--navy)" : "var(--text-3)", letterSpacing: "-0.2px", marginBottom: 6, paddingRight: 76 }}>{m.name}</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: canAccess ? "var(--navy)" : "var(--text-3)", letterSpacing: "-0.2px", marginBottom: 6, paddingRight: comingSoon ? 76 : 0 }}>{m.name}</div>
                     <div style={{ fontSize: 13, color: canAccess ? "var(--text-2)" : "var(--text-3)", lineHeight: 1.5 }}>{m.description}</div>
 
                     {canAccess && <div style={{ marginTop: 14, fontSize: 12, fontWeight: 600, color: "var(--steel)" }}>Open &rarr;</div>}

@@ -21,7 +21,7 @@ const CATEGORY_COLORS = {
 // The Billing Error Detection page: view switcher, center progress row,
 // filters, and the error table. All state lives in useErrorTracker; this
 // component only renders what the hook returns.
-export default function ErrorTracker({ tracker, onOpenNote }) {
+export default function ErrorTracker({ tracker, isAdmin = false, onOpenNote }) {
   const {
     rawData, history, carryoverRows, outstanding, goalsMeta,
     trackerView, setTrackerView,
@@ -44,8 +44,18 @@ export default function ErrorTracker({ tracker, onOpenNote }) {
           <div style={{ display: "inline-flex", background: "#f1f5f9", borderRadius: 10, padding: 3, marginBottom: 18, border: "1.5px solid #e2e8f0" }}>
             {[
               { id: "week", label: "This Week", count: rawData.length },
-              { id: "backlog", label: "Backlog 2026", count: history.length },
-              { id: "carryover", label: "Carryover", count: carryoverRows.length },
+              // 2026-07-22 (Brock): Backlog and Carryover are ADMIN ONLY.
+              // Everyone else works "This week" and "Outstanding Goals"; the
+              // year-long views were more history than a center manager can
+              // act on. Enforced at the API too — /api/errors/history is
+              // admin-gated, so `history` is empty for non-admins and these
+              // tabs would collapse to 0 even without this check. Both layers
+              // on purpose: this one makes the UI right, that one makes it
+              // secure.
+              ...(isAdmin ? [
+                { id: "backlog", label: "Backlog 2026", count: history.length },
+                { id: "carryover", label: "Carryover", count: carryoverRows.length },
+              ] : []),
               // Separate pull, separate table, no manager state — see
               // OutstandingGoals.jsx. Hidden until the loader has run once.
               ...(outstanding.length > 0
