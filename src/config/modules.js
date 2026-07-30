@@ -14,6 +14,7 @@ export const MODULES = [
 
   // ── Funding & Fleet ────────────────────────────────────────────────────────
   { id: "utilization",      name: "Utilization Tracker",     category: "Funding & Fleet", icon: "trending", description: "PAWS funding use per client, with red / yellow / green alerts as authorizations run low.", available: true },
+  { id: "private-pay",      name: "Private Pay Tracking",    category: "Funding & Fleet", icon: "receipt", description: "Prepaid family checks tracked as days — log each check, watch remaining days so a manager never schedules past what's paid.", available: true },
   { id: "fleet",            name: "Fleet Dashboard",         category: "Funding & Fleet", icon: "truck", description: "Vehicle maintenance status, service history, and repair tickets.", available: true },
 
   // ── Tools ──────────────────────────────────────────────────────────────────
@@ -33,7 +34,7 @@ export const PAGE_LABEL = {
   home: "Home", modules: "Home",
   billing: "Billing Overview", "provider-reports": "Provider Reports",
   invoices: "Invoice Manager", rebilling: "Rebilling & Unpaids", tracker: "Billing Error Detection",
-  utilization: "Utilization Tracker", fleet: "Fleet Dashboard",
+  utilization: "Utilization Tracker", "private-pay": "Private Pay Tracking", fleet: "Fleet Dashboard",
   ops: "Pipeline Health", calculator: "Saturday Calculator",
   faq: "Help Center", "ops-command": "Operations Command Center",
 };

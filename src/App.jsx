@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import FleetDashboard from "./components/FleetDashboard.jsx";
 import UtilizationDashboard from "./components/UtilizationDashboard.jsx";
+import PrivatePayTracker from "./components/PrivatePayTracker.jsx";
 import BillingDashboard from "./components/BillingDashboard.jsx";
 import ProviderReportsDashboard from "./components/ProviderReportsDashboard.jsx";
 import InvoicesDashboard from "./components/InvoicesDashboard.jsx";
@@ -326,6 +327,14 @@ export default function App() {
         <div className="page-anim">
           <ErrorBoundary moduleName="Utilization Dashboard">
             <UtilizationDashboard onBack={() => setActiveTab("home")} userRole={userRole} />
+          </ErrorBoundary>
+        </div>
+      )}
+
+      {activeTab === "private-pay" && !showUnderConstruction && (
+        <div className="page-anim">
+          <ErrorBoundary moduleName="Private Pay Tracking">
+            <PrivatePayTracker userRole={userRole} />
           </ErrorBoundary>
         </div>
       )}
