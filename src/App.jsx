@@ -201,10 +201,21 @@ export default function App() {
             <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
               {!tracker.loaded && <span style={{ fontSize: 12, color: "var(--text-3)" }}>Loading…</span>}
               {userRole === "admin" && (
-                <PipelineRefreshButton
-                  pipeline="errors" label="Refresh Data"
-                  onSuccess={tracker.reload} showToast={showToast}
-                />
+                // Context-aware: on the Outstanding Goals sub-tab, refresh that
+                // standalone Brittco pull (report 140); on every other view,
+                // refresh the weekly error pipeline. Both re-run the real script
+                // on the office PC and then re-fetch via tracker.reload.
+                tracker.trackerView === "goals" ? (
+                  <PipelineRefreshButton
+                    pipeline="outstanding_goals" label="Refresh Goals"
+                    onSuccess={tracker.reload} showToast={showToast}
+                  />
+                ) : (
+                  <PipelineRefreshButton
+                    pipeline="errors" label="Refresh Data"
+                    onSuccess={tracker.reload} showToast={showToast}
+                  />
+                )
               )}
               <div style={{ background: "var(--bg-soft)", border: "1px solid var(--border)", borderRadius: 6, padding: "4px 10px", fontSize: 12, color: "var(--text-2)" }}>
                 {tracker.stats.open} open · {tracker.stats.fixed} fixed
