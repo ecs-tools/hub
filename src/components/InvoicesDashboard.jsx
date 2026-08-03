@@ -982,6 +982,29 @@ export default function InvoicesDashboard({ userRole }) {
     [tabInvoices]
   );
 
+  // Land the user on the month they're actually working — the app-wide billing
+  // month if it has invoices, else the most recent month with data — instead of
+  // dumping every month together on open. Runs ONCE (first time invoices load);
+  // after that the month dropdown is fully theirs, including "All".
+  const billingMonthIso = useMemo(() => {
+    const bm = billingMonth?.billing_month;            // e.g. "June 2026"
+    if (!bm) return null;
+    const [mName, yr] = bm.split(" ");
+    const mi = MONTH_NAMES.indexOf(mName);
+    return mi >= 0 && yr ? `${yr}-${String(mi + 1).padStart(2, "0")}-01` : null;
+  }, [billingMonth]);
+
+  const didInitMonth = useRef(false);
+  useEffect(() => {
+    if (didInitMonth.current || !invoices.length) return;
+    didInitMonth.current = true;
+    setMonthFilter(
+      billingMonthIso && months.includes(billingMonthIso)
+        ? billingMonthIso
+        : (months[0] || "All")
+    );
+  }, [invoices, billingMonthIso, months]);
+
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     return tabInvoices.filter(i => {
