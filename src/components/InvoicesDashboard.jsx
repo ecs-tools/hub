@@ -78,6 +78,14 @@ const fmtMonth = (iso) => {
   return isNaN(d) ? iso : d.toLocaleDateString("en-US", { month: "short", year: "numeric" });
 };
 
+// Full "May 2026" form — what the generators take as --month and what the
+// app-wide billing-month setting stores.
+const monthLabel = (iso) => {
+  if (!iso) return "";
+  const d = new Date(`${String(iso).slice(0, 10)}T00:00:00`);
+  return isNaN(d) ? "" : `${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`;
+};
+
 const fmtDate = (iso) => {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -289,23 +297,37 @@ function CountyRunRow({ county, latestRun, busy, anyEcsActive, onRun }) {
 }
 
 // County-scoped re-runs card — shown inside the ECS tab only (admin).
+// Collapsed by default: the core loop is upload → generate; this is the
+// advanced control that sits AROUND it, not in front of it.
 function CountyRunsCard({ runs, busy, onRun }) {
+  const [open, setOpen] = useState(false);
   // Any run touching the shared ECS 1_INPUT blocks the whole family.
   const anyEcsActive = runs.some(r =>
     (r.tool === "ecs" || r.tool.startsWith("ecs_")) &&
     (r.status === "queued" || r.status === "running"));
   return (
-    <div style={{ ...S.card, marginBottom: 16 }}>
-      <div style={S.cardTitle}>County-scoped re-runs</div>
-      <div style={{ fontSize: 12, color: "var(--text-2)" }}>
-        Regenerate ONE county without re-running the rest — replaces editing the
-        old B:\ ad-hoc scripts. Uses the billing CSV already on the office PC
-        from this month's main ECS run.
-      </div>
-      {COUNTY_RUNS.map(c => (
-        <CountyRunRow key={c.id} county={c} busy={busy} anyEcsActive={anyEcsActive}
-          latestRun={runs.find(r => r.tool === c.id) || null} onRun={onRun} />
-      ))}
+    <div style={{ ...S.card, marginBottom: 16, paddingTop: 12, paddingBottom: open ? 18 : 12 }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", border: "none", background: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+        <span style={{ fontSize: 12, color: "var(--text-2)" }}>{open ? "▾" : "▸"}</span>
+        <span style={S.cardTitle}>County-scoped re-runs</span>
+        <span style={{ fontSize: 12, color: "var(--text-3)", marginLeft: "auto" }}>
+          {open ? "" : "Warren · Montgomery"}
+        </span>
+      </button>
+      {open && (
+        <>
+          <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 8 }}>
+            Regenerate ONE county without re-running the rest — replaces editing the
+            old B:\ ad-hoc scripts. Uses the billing CSV already on the office PC
+            from this month's main ECS run.
+          </div>
+          {COUNTY_RUNS.map(c => (
+            <CountyRunRow key={c.id} county={c} busy={busy} anyEcsActive={anyEcsActive}
+              latestRun={runs.find(r => r.tool === c.id) || null} onRun={onRun} />
+          ))}
+        </>
+      )}
     </div>
   );
 }
@@ -429,39 +451,57 @@ function DetailDrawer({ invoice, onClose }) {
   );
 }
 
-function PaymentModal({ invoice, onSave, onClose, saving }) {
-  const openBalance = Number(invoice.open_balance || 0);
-  const [amount, setAmount] = useState(openBalance > 0 ? openBalance.toFixed(2) : Number(invoice.amount).toFixed(2));
-  const [paidDate, setPaidDate] = useState(new Date().toISOString().slice(0, 10));
-  const amountNum = parseFloat(amount);
-  const alreadyPaid = Number(invoice.paid_amount || 0);
-  const willBePaid = alreadyPaid + (isNaN(amountNum) ? 0 : amountNum);
-  const fullyPaid = willBePaid >= Number(invoice.amount) - 0.005;
-  const valid = !isNaN(amountNum) && amountNum > 0;
+const OVERLAY = { position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 };
+
+// ── Per-client re-run (ECS): regenerate ONE invoice; the old row auto-voids ──
+function ReRunModal({ invoice, runs, billingMonth, busy, onRun, onClose }) {
+  const [file, setFile] = useState(null);
+  const fileRef = useRef(null);
+  const anyEcsActive = runs.some(r =>
+    (r.tool === "ecs" || r.tool.startsWith("ecs_")) &&
+    (r.status === "queued" || r.status === "running"));
+  const invoiceMonth = monthLabel(invoice.service_month);
+  // The CSV sitting in the tool's input folder is the CURRENT billing month's
+  // export. Re-running any other month with it would bill the wrong data, so
+  // a fresh export for that month is mandatory in that case.
+  const needsFile = !!billingMonth && invoiceMonth !== billingMonth;
+  const canRun = !busy && !anyEcsActive && (!needsFile || file);
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={onClose}>
-      <div style={{ ...S.card, width: 380, padding: "26px 28px" }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "var(--navy)", marginBottom: 2 }}>Record payment</div>
-        <div style={{ fontSize: 13, color: "var(--text-2)", marginBottom: 18 }}>
-          {invoice.client_name} · {fmtMonth(invoice.service_month)} · invoiced {fmtMoney(invoice.amount)}
-          {alreadyPaid > 0 && <> · already paid {fmtMoney(alreadyPaid)}</>}
+    <div style={OVERLAY} onClick={onClose}>
+      <div style={{ ...S.card, width: 460, padding: "26px 28px" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "var(--navy)", marginBottom: 2 }}>Re-run this client only</div>
+        <div style={{ fontSize: 13, color: "var(--text-2)", marginBottom: 14 }}>
+          {invoice.client_name} · {invoiceMonth}
         </div>
-        <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-2)", marginBottom: 5 }}>Payment amount</label>
-        <input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)}
-          style={{ width: "100%", boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 6, padding: "8px 10px", fontSize: 14, fontFamily: "inherit", marginBottom: 14 }} />
-        <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-2)", marginBottom: 5 }}>Payment date</label>
-        <input type="date" value={paidDate} onChange={(e) => setPaidDate(e.target.value)}
-          style={{ width: "100%", boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 6, padding: "8px 10px", fontSize: 14, fontFamily: "inherit", marginBottom: 8 }} />
-        <div style={{ fontSize: 12, color: fullyPaid ? "#166534" : "#854d0e", marginBottom: 18 }}>
-          {valid ? (fullyPaid ? "This settles the invoice — status becomes Paid." : `Partial payment — ${fmtMoney(Number(invoice.amount) - willBePaid)} stays open.`) : "Enter a payment amount."}
+        <div style={{ fontSize: 13, color: "var(--text-1)", lineHeight: 1.55, marginBottom: 14 }}>
+          Regenerates this one invoice — nobody else's invoices are touched. When the
+          new invoice registers, this version is voided automatically with a
+          “superseded” note, so only one stays live.
         </div>
+        <div style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.5, marginBottom: 12 }}>
+          {needsFile
+            ? `This invoice is for ${invoiceMonth}, but the file on the office PC is the ${billingMonth} export — upload a fresh ${invoiceMonth} billing CSV so the right data is billed.`
+            : "Uses the billing CSV already on the office PC. If you corrected the data in Brittco, upload a fresh export instead."}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+          <input ref={fileRef} type="file" accept=".csv" style={{ display: "none" }}
+            onChange={e => setFile(e.target.files?.[0] || null)} />
+          <button onClick={() => fileRef.current?.click()} style={S.actionBtn}>
+            {file ? "Replace CSV" : needsFile ? "Choose billing CSV (required)" : "Fresh billing CSV (optional)"}
+          </button>
+          {file && <span style={{ fontSize: 12, color: "var(--text-1)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</span>}
+        </div>
+        {anyEcsActive && (
+          <div style={{ fontSize: 12, color: "#9a3412", marginBottom: 12 }}>
+            An ECS-family run is already queued or running — it has to finish first.
+          </div>
+        )}
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
           <button onClick={onClose} style={{ ...S.actionBtn, padding: "8px 16px" }}>Cancel</button>
-          <button disabled={!valid || saving}
-            onClick={() => onSave({ status: fullyPaid ? "paid" : "partial", paid_amount: Number(willBePaid.toFixed(2)), paid_date: paidDate })}
-            style={{ ...S.actionBtn, padding: "8px 16px", background: valid ? "var(--navy)" : "#94a3b8", color: "#fff", border: "none", cursor: valid ? "pointer" : "default" }}>
-            {saving ? "Saving…" : "Save payment"}
+          <button disabled={!canRun} onClick={() => onRun(invoice, file)}
+            style={{ ...S.actionBtn, padding: "8px 16px", background: canRun ? "var(--navy)" : "#94a3b8", color: "#fff", border: "none" }}>
+            {busy ? "Queuing…" : "Queue re-run"}
           </button>
         </div>
       </div>
@@ -469,21 +509,194 @@ function PaymentModal({ invoice, onSave, onClose, saving }) {
   );
 }
 
+// ── Rule-violation block on "Mark sent": fix by re-run, or override loudly ───
+function OverrideModal({ blocked, saving, onReRun, onSend, onClose }) {
+  const [reason, setReason] = useState("");
+  const inv = blocked.invoice;
+  return (
+    <div style={OVERLAY} onClick={onClose}>
+      <div style={{ ...S.card, width: 480, padding: "26px 28px" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#b91c1c", marginBottom: 2 }}>Payer rules block this invoice</div>
+        <div style={{ fontSize: 13, color: "var(--text-2)", marginBottom: 14 }}>
+          {inv.client_name} · {fmtMonth(inv.service_month)}
+        </div>
+        <div style={{ border: "1px solid #fecaca", background: "#fef2f2", borderRadius: 6, padding: "10px 14px", marginBottom: 14 }}>
+          {blocked.violations.map((v, i) => (
+            <div key={i} style={{ fontSize: 13, color: "#b91c1c", lineHeight: 1.6 }}>
+              <strong>{v.category}</strong> — {fmtMoney(v.amount)} on the invoice
+              {v.rule_note ? <span style={{ color: "#9a3412" }}> · rule: {v.rule_note}</span> : null}
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: 13, color: "var(--text-1)", lineHeight: 1.55, marginBottom: 14 }}>
+          The clean fix is a re-run: the generator now excludes these items, and the
+          corrected invoice replaces this one automatically. Sending anyway is allowed
+          but recorded on the invoice with your reason.
+        </div>
+        <textarea value={reason} onChange={e => setReason(e.target.value)} rows={2}
+          placeholder="Reason for sending anyway (required to override)"
+          style={{ width: "100%", boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", marginBottom: 16, resize: "vertical" }} />
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
+          <button onClick={onClose} style={{ ...S.actionBtn, padding: "8px 16px" }}>Cancel</button>
+          <button disabled={saving} onClick={() => onReRun(inv)}
+            style={{ ...S.actionBtn, padding: "8px 16px", background: "var(--navy)", color: "#fff", border: "none" }}>
+            Re-run without these items
+          </button>
+          <button disabled={saving || !reason.trim()} onClick={() => onSend(inv, reason.trim())}
+            style={{ ...S.actionBtn, padding: "8px 16px", background: reason.trim() ? "#b91c1c" : "#94a3b8", color: "#fff", border: "none" }}>
+            {saving ? "Saving…" : "Send anyway"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Invoice rules editor: the per-client "this payer disallows X" list ───────
+function RulesModal({ clientNames, onClose, onChanged }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const blankForm = { client_name: "", disallow_ads: false, disallow_nmt: false, disallow_miles: false, note: "" };
+  const [form, setForm] = useState(blankForm);
+
+  const loadRules = () =>
+    fetch(`${API_BASE}/api/invoices/rules`, { credentials: "include" })
+      .then(r => { if (!r.ok) throw new Error(`Rules: ${r.status}`); return r.json(); })
+      .then(setData)
+      .catch(e => setErr(e.message));
+  useEffect(() => { loadRules(); }, []);
+
+  async function save(rule) {
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/invoices/rules`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(rule),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Save failed");
+      setForm(blankForm);
+      await loadRules();
+      onChanged?.();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove(rule) {
+    if (!window.confirm(`Delete the rule for ${rule.client_name}?`)) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/invoices/rules/${rule.id}`, {
+        method: "DELETE", credentials: "include",
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Delete failed");
+      await loadRules();
+      onChanged?.();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const chk = (checked, onChange, label) => (
+    <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--text-1)", cursor: "pointer" }}>
+      <input type="checkbox" checked={checked} onChange={onChange} /> {label}
+    </label>
+  );
+
+  return (
+    <div style={OVERLAY} onClick={onClose}>
+      <div style={{ ...S.card, width: "min(680px, 94vw)", maxHeight: "86vh", overflowY: "auto", padding: "26px 28px" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "var(--navy)" }}>Invoice rules</div>
+          <button onClick={onClose} style={{ ...S.actionBtn, marginLeft: "auto", padding: "4px 9px" }}>✕</button>
+        </div>
+        <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5, marginBottom: 16 }}>
+          What a client's payer agreement disallows on invoices. The generator leaves
+          checked categories off the PDF, and “Mark sent” blocks any invoice that
+          still carries one.
+        </div>
+        {err && <div style={{ fontSize: 13, color: "#b91c1c", marginBottom: 10 }}>{err}</div>}
+        {!data && !err && <div style={{ fontSize: 13, color: "var(--text-2)" }}>Loading rules…</div>}
+        {data?.ready === false && <div style={{ fontSize: 13, color: "var(--text-2)" }}>{data.detail}</div>}
+        {data?.ready && (
+          <>
+            {data.rules.length === 0 && (
+              <div style={{ fontSize: 13, color: "var(--text-3)", marginBottom: 14 }}>No rules yet — add the first one below.</div>
+            )}
+            {data.rules.map(r => (
+              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", borderTop: "1px solid var(--bg-hover)", padding: "9px 0", opacity: r.active ? 1 : 0.55 }}>
+                <div style={{ minWidth: 170, fontSize: 13, fontWeight: 600, color: "var(--navy)" }}>{r.client_name}</div>
+                {chk(r.disallow_ads, () => save({ ...r, disallow_ads: !r.disallow_ads }), "No ADS")}
+                {chk(r.disallow_nmt, () => save({ ...r, disallow_nmt: !r.disallow_nmt }), "No trips")}
+                {chk(r.disallow_miles, () => save({ ...r, disallow_miles: !r.disallow_miles }), "No mileage")}
+                <span style={{ fontSize: 12, color: "var(--text-2)", flex: 1, minWidth: 120 }}>{r.note || ""}</span>
+                <button disabled={saving} onClick={() => save({ ...r, active: !r.active })} style={S.actionBtn}>
+                  {r.active ? "Disable" : "Enable"}
+                </button>
+                <button disabled={saving} onClick={() => remove(r)} style={{ ...S.actionBtn, color: "#b91c1c" }}>Delete</button>
+              </div>
+            ))}
+            <div style={{ borderTop: "1px solid var(--border)", marginTop: 6, paddingTop: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-2)", marginBottom: 8 }}>Add / update a rule</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <input list="rule-client-names" placeholder="Client (as shown in the invoice list)"
+                  value={form.client_name} onChange={e => setForm(f => ({ ...f, client_name: e.target.value }))}
+                  style={{ ...S.select, width: 220 }} />
+                <datalist id="rule-client-names">
+                  {clientNames.map(n => <option key={n} value={n} />)}
+                </datalist>
+                {chk(form.disallow_ads, () => setForm(f => ({ ...f, disallow_ads: !f.disallow_ads })), "No ADS")}
+                {chk(form.disallow_nmt, () => setForm(f => ({ ...f, disallow_nmt: !f.disallow_nmt })), "No trips")}
+                {chk(form.disallow_miles, () => setForm(f => ({ ...f, disallow_miles: !f.disallow_miles })), "No mileage")}
+                <input type="text" placeholder="Note, e.g. 'agreement excludes transport'"
+                  value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
+                  style={{ ...S.select, flex: 1, minWidth: 180 }} />
+                <button disabled={saving || !form.client_name.trim() || !(form.disallow_ads || form.disallow_nmt || form.disallow_miles)}
+                  onClick={() => save({ ...form, client_name: form.client_name.trim(), active: true })}
+                  style={{ ...S.actionBtn, background: "var(--navy)", color: "#fff", border: "none", padding: "7px 14px" }}>
+                  {saving ? "Saving…" : "Save rule"}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // One invoice line inside an expanded folder.
-function InvoiceRow({ inv, isAdmin, saving, onPay, onMarkSent, onDetail }) {
+function InvoiceRow({ inv, ruleFlag, isAdmin, saving, actions, onDetail }) {
   const st = STATUS_STYLES[inv.status] || STATUS_STYLES.generated;
   const ag = AGING_STYLES[inv.aging_bucket] || AGING_STYLES["Current (0-30)"];
+  const pill = (bg, color, text, title) => (
+    <span title={title} style={{ marginLeft: 8, display: "inline-block", padding: "2px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: bg, color }}>
+      {text}
+    </span>
+  );
   return (
-    <tr>
+    <tr style={inv.status === "void" ? { opacity: 0.6 } : undefined}>
       <td style={{ ...S.td, fontWeight: 600, color: "var(--navy)" }}>
         <button onClick={() => onDetail(inv)} title="Review what was invoiced"
           style={{ background: "none", border: "none", padding: 0, font: "inherit", fontWeight: 600, color: "var(--navy)", cursor: "pointer", textDecoration: "underline", textDecorationColor: "var(--light)", textUnderlineOffset: 3 }}>
           {inv.client_name}
         </button>
-        {inv.flag === "zero_with_billing" && (
-          <span style={{ marginLeft: 8, display: "inline-block", padding: "2px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: "#fee2e2", color: "#b91c1c" }}>
-            $0 with billing
-          </span>
+        {inv.flag === "zero_with_billing" &&
+          pill("#fee2e2", "#b91c1c", "$0 with billing")}
+        {ruleFlag && pill(
+          ruleFlag.exact ? "#fee2e2" : "#fef9c3",
+          ruleFlag.exact ? "#b91c1c" : "#854d0e",
+          `⚠ ${ruleFlag.violations.map(v => v.category).join(", ")}`,
+          (ruleFlag.exact
+            ? "On the invoice but disallowed by this client's payer rules — re-run the client to fix"
+            : "Warehouse billing suggests a disallowed category (older invoice — no stored breakdown to check exactly)")
+          + (ruleFlag.rule_note ? ` · rule: ${ruleFlag.rule_note}` : "")
         )}
       </td>
       <td style={{ ...S.td, whiteSpace: "nowrap" }}>{fmtMonth(inv.service_month)}</td>
@@ -503,12 +716,30 @@ function InvoiceRow({ inv, isAdmin, saving, onPay, onMarkSent, onDetail }) {
       </td>
       {isAdmin && (
         <td style={{ ...S.td, whiteSpace: "nowrap" }}>
-          {inv.status === "generated" && (
-            <button style={{ ...S.actionBtn, marginRight: 6 }} disabled={saving} onClick={() => onMarkSent(inv)}>Mark sent</button>
-          )}
-          {inv.status !== "paid" && inv.status !== "void" && (
-            <button style={{ ...S.actionBtn, background: "var(--navy)", color: "#fff", border: "none" }} disabled={saving} onClick={() => onPay(inv)}>Record payment</button>
-          )}
+          {(() => {
+            const btn = (label, onClick, opts = {}) => (
+              <button key={label} disabled={saving}
+                onClick={() => onClick(inv)}
+                style={{ ...S.actionBtn, marginRight: 6,
+                  ...(opts.primary ? { background: "var(--navy)", color: "#fff", border: "none" } : {}),
+                  ...(opts.danger ? { color: "#b91c1c" } : {}) }}>
+                {label}
+              </button>
+            );
+            const out = [];
+            if (inv.status === "generated") out.push(btn("Mark sent", actions.markSent, { primary: true }));
+            if (inv.status === "sent") out.push(btn("Unsend", actions.unsend));
+            if (["generated", "sent", "partial"].includes(inv.status))
+              out.push(btn("Mark paid", actions.markPaid));
+            if (["paid", "partial"].includes(inv.status))
+              out.push(btn("Mark unpaid", actions.markUnpaid));
+            if (inv.tool === "ecs" && inv.status !== "void")
+              out.push(btn("Re-run", actions.reRun));
+            if (!["void", "paid"].includes(inv.status))
+              out.push(btn("Void", actions.void, { danger: true }));
+            if (inv.status === "void") out.push(btn("Unvoid", actions.unvoid));
+            return out;
+          })()}
         </td>
       )}
     </tr>
@@ -516,7 +747,7 @@ function InvoiceRow({ inv, isAdmin, saving, onPay, onMarkSent, onDetail }) {
 }
 
 // A collapsible folder group (county / Private Pay / …) within a tool tab.
-function FolderGroup({ folder, invoices, isAdmin, saving, onPay, onMarkSent, onDetail, defaultOpen }) {
+function FolderGroup({ folder, invoices, ruleFlags, isAdmin, saving, actions, onDetail, defaultOpen }) {
   const [open, setOpen] = useState(defaultOpen);
   const total = invoices.reduce((s, i) => s + Number(i.amount || 0), 0);
   const openBal = invoices.reduce((s, i) => s + Number(i.open_balance || 0), 0);
@@ -548,7 +779,8 @@ function FolderGroup({ folder, invoices, isAdmin, saving, onPay, onMarkSent, onD
             </thead>
             <tbody>
               {invoices.map(inv => (
-                <InvoiceRow key={inv.id} inv={inv} isAdmin={isAdmin} saving={saving} onPay={onPay} onMarkSent={onMarkSent} onDetail={onDetail} />
+                <InvoiceRow key={inv.id} inv={inv} ruleFlag={ruleFlags[String(inv.id)]}
+                  isAdmin={isAdmin} saving={saving} actions={actions} onDetail={onDetail} />
               ))}
             </tbody>
           </table>
@@ -569,7 +801,10 @@ export default function InvoicesDashboard({ userRole }) {
   const [statusFilter, setStatusFilter] = useState("all");
   const [monthFilter, setMonthFilter] = useState("All");
   const [search, setSearch] = useState("");
-  const [payModal, setPayModal] = useState(null);
+  const [reRunInvoice, setReRunInvoice] = useState(null);   // invoice for the per-client re-run modal
+  const [ruleBlocked, setRuleBlocked] = useState(null);     // {invoice, violations} from a blocked Mark sent
+  const [showRules, setShowRules] = useState(false);
+  const [ruleFlags, setRuleFlags] = useState({});           // invoice id -> {violations, exact, rule_note}
   const [detailInvoice, setDetailInvoice] = useState(null);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
@@ -582,10 +817,18 @@ export default function InvoicesDashboard({ userRole }) {
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 3200); };
 
+  const loadFlags = () =>
+    fetch(`${API_BASE}/api/invoices/flags`, { credentials: "include" })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d?.ready) setRuleFlags(d.flags || {}); })
+      .catch(() => {});
+
   async function load() {
     try {
+      // include_void so the "Void" status filter has data; the default view
+      // hides voids client-side.
       const [listRes, sumRes] = await Promise.all([
-        fetch(`${API_BASE}/api/invoices`, { credentials: "include" }),
+        fetch(`${API_BASE}/api/invoices?include_void=true`, { credentials: "include" }),
         fetch(`${API_BASE}/api/invoices/summary`, { credentials: "include" }),
       ]);
       if (listRes.status === 404) { setBackendPending(true); return; }
@@ -616,7 +859,7 @@ export default function InvoicesDashboard({ userRole }) {
       .then(d => { if (d?.runs) setRuns(d.runs); })
       .catch(() => {});
 
-  useEffect(() => { load(); loadMonth(); loadRuns(); }, []);
+  useEffect(() => { load(); loadFlags(); loadMonth(); loadRuns(); }, []);
 
   // Poll run status while anything is queued/running; refresh invoices when a
   // run flips to success (its registry rows are the new data).
@@ -624,7 +867,7 @@ export default function InvoicesDashboard({ userRole }) {
     const flipped = runs.some(r => prevRunStatuses.current[r.id] &&
       prevRunStatuses.current[r.id] !== r.status && r.status === "success");
     prevRunStatuses.current = Object.fromEntries(runs.map(r => [r.id, r.status]));
-    if (flipped) { showToast("Invoice run finished — refreshing"); load(); }
+    if (flipped) { showToast("Invoice run finished — refreshing"); load(); loadFlags(); }
     if (runs.some(r => r.status === "queued" || r.status === "running")) {
       const t = setTimeout(loadRuns, 8000);
       return () => clearTimeout(t);
@@ -742,6 +985,8 @@ export default function InvoicesDashboard({ userRole }) {
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     return tabInvoices.filter(i => {
+      // Voided (incl. superseded) rows only show under the explicit Void filter.
+      if (i.status === "void" && statusFilter !== "void") return false;
       if (statusFilter !== "all" && (statusFilter === "open"
         ? (i.status === "paid" || Number(i.open_balance) <= 0)
         : i.status !== statusFilter)) return false;
@@ -782,7 +1027,13 @@ export default function InvoicesDashboard({ userRole }) {
       });
       if (!res.ok) {
         const detail = (await res.json().catch(() => ({}))).detail;
-        throw new Error(detail || `Update failed (${res.status})`);
+        // A blocked "Mark sent": the payer rules found disallowed items —
+        // hand off to the override modal instead of a toast.
+        if (detail && typeof detail === "object" && detail.rule_violations) {
+          setRuleBlocked({ invoice: inv, violations: detail.rule_violations });
+          return false;
+        }
+        throw new Error((typeof detail === "string" && detail) || `Update failed (${res.status})`);
       }
       const updated = await res.json();
       setInvoices(list => list.map(i => (i.id === updated.id ? updated : i)));
@@ -790,13 +1041,72 @@ export default function InvoicesDashboard({ userRole }) {
       fetch(`${API_BASE}/api/invoices/summary`, { credentials: "include" })
         .then(r => (r.ok ? r.json() : null)).then(d => { if (d && d.ready !== false) setSummary(d); })
         .catch(() => {});
-      setPayModal(null);
+      loadFlags();
+      setRuleBlocked(null);
+      return true;
     } catch (err) {
       showToast(err.message);
+      return false;
     } finally {
       setSaving(false);
     }
   }
+
+  // Per-client re-run: queue an ECS run filtered to this one client, for the
+  // invoice's own month. The registry auto-voids this invoice when the
+  // regenerated one lands.
+  async function queueClientRerun(inv, file) {
+    setRunBusy(true);
+    try {
+      let uploadId = null;
+      if (file) {
+        const fd = new FormData();
+        fd.append("tool", "ecs");
+        fd.append("file", file);
+        const upRes = await fetch(`${API_BASE}/api/invoices/upload`, {
+          method: "POST", credentials: "include", body: fd,
+        });
+        if (!upRes.ok) throw new Error((await upRes.json().catch(() => ({}))).detail || "Upload failed");
+        uploadId = (await upRes.json()).upload_id;
+      }
+      const runRes = await fetch(`${API_BASE}/api/invoices/run`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tool: "ecs",
+          upload_id: uploadId,
+          clients: inv.client_name,
+          billing_month: monthLabel(inv.service_month),
+        }),
+      });
+      if (!runRes.ok) throw new Error((await runRes.json().catch(() => ({}))).detail || "Could not queue the run");
+      showToast(`Re-run queued for ${inv.client_name} — this version is superseded when it finishes`);
+      setReRunInvoice(null);
+      setRuleBlocked(null);
+      loadRuns();
+    } catch (e) {
+      showToast(e.message);
+    } finally {
+      setRunBusy(false);
+    }
+  }
+
+  const rowActions = {
+    markSent:   (inv) => patchInvoice(inv, { status: "sent" }, `${inv.client_name} marked sent`),
+    unsend:     (inv) => patchInvoice(inv, { status: "generated" }, `${inv.client_name} unsent`),
+    markPaid:   (inv) => patchInvoice(inv, {
+      status: "paid", paid_amount: Number(inv.amount),
+      paid_date: new Date().toISOString().slice(0, 10),
+    }, `${inv.client_name} marked paid`),
+    markUnpaid: (inv) => patchInvoice(inv, { status: "sent", paid_amount: null, paid_date: null },
+      `${inv.client_name} marked unpaid`),
+    void:       (inv) => {
+      if (window.confirm(`Void the ${fmtMonth(inv.service_month)} invoice for ${inv.client_name} (${fmtMoney(inv.amount)})?\n\nIt stays visible under the "Void" status filter and can be unvoided.`))
+        patchInvoice(inv, { status: "void" }, `${inv.client_name} voided`);
+    },
+    unvoid:     (inv) => patchInvoice(inv, { status: "generated" }, `${inv.client_name} unvoided`),
+    reRun:      (inv) => setReRunInvoice(inv),
+  };
 
   if (loading) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 300, fontSize: 16, color: "var(--text-2)" }}>Loading invoices…</div>;
 
@@ -837,22 +1147,6 @@ export default function InvoicesDashboard({ userRole }) {
       {/* Billing month — the one visible, settable value */}
       <BillingMonthBar month={billingMonth?.billing_month} isDefault={billingMonth?.is_default}
         isAdmin={isAdmin} onSave={saveBillingMonth} saving={monthSaving} />
-
-      {/* KPI strip (overall AR across all tools) */}
-      <div style={{ ...S.row, gridTemplateColumns: "repeat(5, 1fr)" }}>
-        <div style={S.card}>
-          <div style={S.cardTitle}>Total Open</div>
-          <div style={S.kpiValue}>{fmtMoney(summary?.total_open)}</div>
-          <div style={S.kpiSub}>{summary?.open_count ?? 0} open invoice{(summary?.open_count ?? 0) === 1 ? "" : "s"}</div>
-        </div>
-        {BUCKET_ORDER.map(b => (
-          <div key={b} style={S.card}>
-            <div style={S.cardTitle}>{b}</div>
-            <div style={{ ...S.kpiValue, fontSize: 22, color: AGING_STYLES[b].text }}>{fmtMoney(bucketAmounts[b]?.open_amount)}</div>
-            <div style={S.kpiSub}>{bucketAmounts[b]?.invoice_count ?? 0} invoice{(bucketAmounts[b]?.invoice_count ?? 0) === 1 ? "" : "s"}</div>
-          </div>
-        ))}
-      </div>
 
       {/* Tool tabs */}
       <div style={{ display: "flex", gap: 4, borderBottom: "2px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
@@ -898,6 +1192,11 @@ export default function InvoicesDashboard({ userRole }) {
           <option value="open">Open only</option>
           {Object.entries(STATUS_STYLES).map(([v, s]) => <option key={v} value={v}>{s.label}</option>)}
         </select>
+        {isAdmin && (
+          <button onClick={() => setShowRules(true)} style={S.actionBtn}>
+            Invoice rules{Object.keys(ruleFlags).length > 0 ? ` · ${Object.keys(ruleFlags).length} flagged` : ""}
+          </button>
+        )}
         <div style={{ fontSize: 12, color: "var(--text-2)", marginLeft: "auto", ...S.mono }}>
           {visible.length} of {tabInvoices.length} invoices
         </div>
@@ -915,12 +1214,28 @@ export default function InvoicesDashboard({ userRole }) {
         </div>
       ) : (
         folders.map(([folder, list], idx) => (
-          <FolderGroup key={folder} folder={folder} invoices={list} isAdmin={isAdmin} saving={saving}
+          <FolderGroup key={folder} folder={folder} invoices={list} ruleFlags={ruleFlags}
+            isAdmin={isAdmin} saving={saving} actions={rowActions}
             defaultOpen={folders.length <= 3 || idx === 0}
-            onPay={setPayModal} onDetail={setDetailInvoice}
-            onMarkSent={(inv) => patchInvoice(inv, { status: "sent" }, `${inv.client_name} marked sent`)} />
+            onDetail={setDetailInvoice} />
         ))
       )}
+
+      {/* AR overview — support info below the work area, not in front of it */}
+      <div style={{ ...S.row, gridTemplateColumns: "repeat(5, 1fr)", marginTop: 20 }}>
+        <div style={S.card}>
+          <div style={S.cardTitle}>Total Open (all tools)</div>
+          <div style={S.kpiValue}>{fmtMoney(summary?.total_open)}</div>
+          <div style={S.kpiSub}>{summary?.open_count ?? 0} open invoice{(summary?.open_count ?? 0) === 1 ? "" : "s"}</div>
+        </div>
+        {BUCKET_ORDER.map(b => (
+          <div key={b} style={S.card}>
+            <div style={S.cardTitle}>{b}</div>
+            <div style={{ ...S.kpiValue, fontSize: 22, color: AGING_STYLES[b].text }}>{fmtMoney(bucketAmounts[b]?.open_amount)}</div>
+            <div style={S.kpiSub}>{bucketAmounts[b]?.invoice_count ?? 0} invoice{(bucketAmounts[b]?.invoice_count ?? 0) === 1 ? "" : "s"}</div>
+          </div>
+        ))}
+      </div>
 
       <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 12, lineHeight: 1.5 }}>
         Aging is measured from the end of the service month. This page covers invoices the
@@ -929,9 +1244,23 @@ export default function InvoicesDashboard({ userRole }) {
 
       {detailInvoice && <DetailDrawer key={detailInvoice.id} invoice={detailInvoice} onClose={() => setDetailInvoice(null)} />}
 
-      {payModal && (
-        <PaymentModal invoice={payModal} saving={saving} onClose={() => setPayModal(null)}
-          onSave={(body) => patchInvoice(payModal, body, `Payment recorded for ${payModal.client_name}`)} />
+      {reRunInvoice && (
+        <ReRunModal invoice={reRunInvoice} runs={runs} billingMonth={billingMonth?.billing_month}
+          busy={runBusy} onRun={queueClientRerun} onClose={() => setReRunInvoice(null)} />
+      )}
+
+      {ruleBlocked && (
+        <OverrideModal blocked={ruleBlocked} saving={saving}
+          onReRun={(inv) => { setRuleBlocked(null); setReRunInvoice(inv); }}
+          onSend={(inv, reason) => patchInvoice(inv,
+            { status: "sent", override_rules: true, override_reason: reason },
+            `${inv.client_name} marked sent — override recorded`)}
+          onClose={() => setRuleBlocked(null)} />
+      )}
+
+      {showRules && (
+        <RulesModal clientNames={[...new Set(invoices.map(i => i.client_name))].sort()}
+          onChanged={loadFlags} onClose={() => setShowRules(false)} />
       )}
 
       {toast && (
