@@ -45,8 +45,6 @@ const S = {
   row:       { display: "grid", gap: 14, marginBottom: 16 },
   card:      { background: "#fff", borderRadius: 8, padding: "18px 20px", border: "1px solid var(--border)" },
   cardTitle: { fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8, color: "var(--text-2)", marginBottom: 8 },
-  kpiValue:  { fontSize: 28, fontWeight: 700, color: "var(--navy)", fontVariantNumeric: "tabular-nums" },
-  kpiSub:    { fontSize: 13, color: "var(--text-2)", marginTop: 3 },
   th:        { textAlign: "left", padding: "8px 12px", background: "var(--bg-soft)", color: "var(--text-2)", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, borderBottom: "1px solid var(--border)" },
   td:        { padding: "9px 12px", borderBottom: "1px solid var(--bg-hover)", verticalAlign: "middle", fontSize: 13 },
   select:    { border: "1px solid var(--border)", borderRadius: 6, padding: "7px 10px", fontSize: 13, outline: "none", fontFamily: "inherit", background: "white", color: "var(--navy)" },
@@ -69,8 +67,6 @@ const AGING_STYLES = {
   "61-90":          { bg: "#ffedd5", text: "#9a3412" },
   "90+":            { bg: "#fee2e2", text: "#b91c1c" },
 };
-
-const BUCKET_ORDER = ["Current (0-30)", "31-60", "61-90", "90+"];
 
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"];
@@ -226,25 +222,41 @@ function saveDayNames(tool, names) {
   } catch { /* a full or blocked localStorage must never break a run */ }
 }
 
-function DayOverrideFields({ rows, setRows, disabled }) {
+// `names` comes from invoices this tool has already generated (registry
+// client_name), so the picker offers the exact strings the config workbook
+// uses — no guessing what to type, and still no client names in this repo.
+// Falls back to a free-text box before the tool has ever run.
+function DayOverrideFields({ rows, setRows, names, disabled }) {
   const set = (i, key, val) =>
     setRows(rows.map((r, j) => (j === i ? { ...r, [key]: val } : r)));
+  const taken = new Set(rows.map(r => r.name).filter(Boolean));
 
   return (
     <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--bg-hover)" }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
         <span style={{ ...S.cardTitle, marginBottom: 0 }}>Day overrides</span>
         <span style={{ fontSize: 12, color: "var(--text-2)" }}>
-          Optional — for clients split across two invoices. Applies to this run only;
+          Optional. Set the days for a client split across two invoices. This run only —
           the config workbook is not changed. Leave blank to use the workbook.
         </span>
       </div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
         {rows.map((r, i) => (
           <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input type="text" placeholder="Invoice name" value={r.name} disabled={disabled}
-              onChange={e => set(i, "name", e.target.value)}
-              style={{ ...S.select, width: 190, fontSize: 12 }} />
+            {names.length > 0 ? (
+              <select value={r.name} disabled={disabled}
+                onChange={e => set(i, "name", e.target.value)}
+                style={{ ...S.select, width: 200, fontSize: 12 }}>
+                <option value="">Choose a client…</option>
+                {names.map(n => (
+                  <option key={n} value={n} disabled={n !== r.name && taken.has(n)}>{n}</option>
+                ))}
+              </select>
+            ) : (
+              <input type="text" placeholder="Invoice name" value={r.name} disabled={disabled}
+                onChange={e => set(i, "name", e.target.value)}
+                style={{ ...S.select, width: 200, fontSize: 12 }} />
+            )}
             <input type="number" min="0" step="1" placeholder="days" value={r.days} disabled={disabled}
               onChange={e => set(i, "days", e.target.value)}
               style={{ ...S.select, width: 74, fontSize: 12, ...S.mono }} />
@@ -258,6 +270,11 @@ function DayOverrideFields({ rows, setRows, disabled }) {
           </button>
         )}
       </div>
+      {names.length === 0 && (
+        <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 6 }}>
+          Names will become a picker once this tool has generated a month.
+        </div>
+      )}
     </div>
   );
 }
@@ -275,7 +292,7 @@ function buildDayOverrides(rows) {
 // Rendered with key={tool} so switching tabs REMOUNTS it. That resets the day
 // boxes (and the chosen file, which used to follow you from one tool's tab to
 // the next) without an effect that re-seeds state after the fact.
-function GenerateCard({ tool, billingMonth, latestRun, busy, onGenerate }) {
+function GenerateCard({ tool, billingMonth, latestRun, busy, clientNames, onGenerate }) {
   const cfg = TOOLS.find(t => t.id === tool);
   const [file, setFile] = useState(null);
   const [dayRows, setDayRows] = useState(
@@ -336,7 +353,7 @@ function GenerateCard({ tool, billingMonth, latestRun, busy, onGenerate }) {
       </div>
       {cfg.dayOverrides && (
         <DayOverrideFields rows={dayRows} setRows={setDayRows}
-          disabled={busy || runActive} />
+          names={clientNames} disabled={busy || runActive} />
       )}
       <RunStatusLine run={latestRun} />
       {runActive && (
@@ -892,7 +909,6 @@ export default function InvoicesDashboard({ userRole }) {
   const [backendPending, setBackendPending] = useState(false);
   const [notReady, setNotReady] = useState(null);
   const [invoices, setInvoices] = useState([]);
-  const [summary, setSummary] = useState(null);
   const [activeTool, setActiveTool] = useState("ecs");
   const [statusFilter, setStatusFilter] = useState("all");
   const [monthFilter, setMonthFilter] = useState("All");
@@ -923,19 +939,13 @@ export default function InvoicesDashboard({ userRole }) {
     try {
       // include_void so the "Void" status filter has data; the default view
       // hides voids client-side.
-      const [listRes, sumRes] = await Promise.all([
-        fetch(`${API_BASE}/api/invoices?include_void=true`, { credentials: "include" }),
-        fetch(`${API_BASE}/api/invoices/summary`, { credentials: "include" }),
-      ]);
+      const listRes = await fetch(`${API_BASE}/api/invoices?include_void=true`,
+        { credentials: "include" });
       if (listRes.status === 404) { setBackendPending(true); return; }
       if (!listRes.ok) throw new Error(`Invoices: ${listRes.status}`);
       const listData = await listRes.json();
       if (listData.ready === false) { setNotReady(listData.detail || "Not set up yet."); return; }
       setInvoices(listData.invoices || []);
-      if (sumRes.ok) {
-        const sumData = await sumRes.json();
-        if (sumData.ready !== false) setSummary(sumData);
-      }
     } catch (err) {
       console.error("Invoices load error:", err);
       setError(err.message);
@@ -1128,15 +1138,18 @@ export default function InvoicesDashboard({ userRole }) {
     return Object.entries(m).sort((a, b) => a[0].localeCompare(b[0]));
   }, [visible]);
 
-  const bucketAmounts = useMemo(() => {
-    const map = {};
-    (summary?.buckets || []).forEach(b => { map[b.aging_bucket] = b; });
-    return map;
-  }, [summary]);
-
   const latestRunForTool = useMemo(
     () => runs.find(r => r.tool === activeTool) || null,
     [runs, activeTool]
+  );
+
+  // Every client name this tool has ever invoiced — feeds the day-override
+  // picker. The registry stores the generator's own invoice name, so these are
+  // exactly the strings its config workbook expects.
+  const toolClientNames = useMemo(
+    () => [...new Set((byTool[activeTool] || [])
+      .map(i => i.client_name).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [byTool, activeTool]
   );
 
   async function patchInvoice(inv, body, successMsg) {
@@ -1161,9 +1174,6 @@ export default function InvoicesDashboard({ userRole }) {
       const updated = await res.json();
       setInvoices(list => list.map(i => (i.id === updated.id ? updated : i)));
       showToast(successMsg);
-      fetch(`${API_BASE}/api/invoices/summary`, { credentials: "include" })
-        .then(r => (r.ok ? r.json() : null)).then(d => { if (d && d.ready !== false) setSummary(d); })
-        .catch(() => {});
       loadFlags();
       setRuleBlocked(null);
       return true;
@@ -1295,7 +1305,8 @@ export default function InvoicesDashboard({ userRole }) {
       {isAdmin && (
         <GenerateCard key={activeTool} tool={activeTool}
           billingMonth={billingMonth?.billing_month || "…"}
-          latestRun={latestRunForTool} busy={runBusy} onGenerate={generateInvoices} />
+          latestRun={latestRunForTool} busy={runBusy}
+          clientNames={toolClientNames} onGenerate={generateInvoices} />
       )}
 
       {/* County-scoped re-runs — ECS tab only (§7.1: county cards inside the tab) */}
@@ -1345,23 +1356,13 @@ export default function InvoicesDashboard({ userRole }) {
         ))
       )}
 
-      {/* AR overview — support info below the work area, not in front of it */}
-      <div style={{ ...S.row, gridTemplateColumns: "repeat(5, 1fr)", marginTop: 20 }}>
-        <div style={S.card}>
-          <div style={S.cardTitle}>Total Open (all tools)</div>
-          <div style={S.kpiValue}>{fmtMoney(summary?.total_open)}</div>
-          <div style={S.kpiSub}>{summary?.open_count ?? 0} open invoice{(summary?.open_count ?? 0) === 1 ? "" : "s"}</div>
-        </div>
-        {BUCKET_ORDER.map(b => (
-          <div key={b} style={S.card}>
-            <div style={S.cardTitle}>{b}</div>
-            <div style={{ ...S.kpiValue, fontSize: 22, color: AGING_STYLES[b].text }}>{fmtMoney(bucketAmounts[b]?.open_amount)}</div>
-            <div style={S.kpiSub}>{bucketAmounts[b]?.invoice_count ?? 0} invoice{(bucketAmounts[b]?.invoice_count ?? 0) === 1 ? "" : "s"}</div>
-          </div>
-        ))}
-      </div>
+      {/* The five AR aging tiles used to sit here. Removed 2026-08-11: this page
+          is where invoices get MADE and sent, and a portfolio total answers a
+          question nobody is asking mid-close. Per-invoice aging is still on
+          every row. The /api/invoices/summary endpoint is untouched and still
+          serves Billing Overview. */}
 
-      <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 12, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 20, lineHeight: 1.5 }}>
         Aging is measured from the end of the service month. This page covers invoices the
         tools generate (county / private pay / patient-liability / vouchers); waiver-claim AR lives in Billing Overview.
       </div>
