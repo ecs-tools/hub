@@ -18,7 +18,13 @@ import Icon from "./Icon.jsx";
 const TOOLS = [
   { id: "ecs",    label: "ECS",               upload: "required", inputHint: "BillingByCostCenterDetail3 CSV" },
   { id: "lorain", label: "Lorain",            upload: "required", inputHint: "BillingByCostCenterDetail3 CSV (Lorain export) — output is one county workbook" },
-  { id: "osl",    label: "OSL",               upload: "required", inputHint: "BillingByCostCenterDetail3 CSV (OSL export — ASA day counts)" },
+  // dayOverrides: OSL splits some clients across two invoices whose day counts
+  // change month to month. Without this the only way to change them is editing
+  // the config workbook on the office PC. Names are deliberately NOT listed
+  // here — this repo is public, and the workbook is the one place client names
+  // belong. The generator validates them and refuses to run on a typo.
+  { id: "osl",    label: "OSL",               upload: "required", dayOverrides: true,
+    inputHint: "BillingByCostCenterDetail3 CSV (OSL export — ASA day counts)" },
   { id: "pl",     label: "Patient Liability", upload: "none",     inputHint: "Config-driven — no master file" },
   { id: "sos",    label: "SOS",               upload: "required", inputHint: "Month CSV" },
   { id: "sy",     label: "Summer Youth",      upload: "optional", inputHint: "Fresh Brittco export (recommended for a closed month); otherwise reads the warehouse" },
@@ -197,10 +203,84 @@ function RunStatusLine({ run }) {
   );
 }
 
+// Day counts for split-billed clients, set for ONE run. The names sit in the
+// config workbook on the office PC, so they're typed here once and remembered
+// in this browser — next month only the numbers change. Days are deliberately
+// NOT remembered: a pre-filled day count is last month's answer wearing this
+// month's label, and nobody would notice.
+const DAY_NAME_KEY = "ecs.invoices.dayOverrideNames";
+
+function loadDayNames(tool) {
+  try {
+    const all = JSON.parse(localStorage.getItem(DAY_NAME_KEY) || "{}");
+    const names = Array.isArray(all[tool]) ? all[tool].filter(n => typeof n === "string") : [];
+    return names.length ? names : ["", ""];
+  } catch { return ["", ""]; }
+}
+
+function saveDayNames(tool, names) {
+  try {
+    const all = JSON.parse(localStorage.getItem(DAY_NAME_KEY) || "{}");
+    all[tool] = names.filter(n => n.trim());
+    localStorage.setItem(DAY_NAME_KEY, JSON.stringify(all));
+  } catch { /* a full or blocked localStorage must never break a run */ }
+}
+
+function DayOverrideFields({ rows, setRows, disabled }) {
+  const set = (i, key, val) =>
+    setRows(rows.map((r, j) => (j === i ? { ...r, [key]: val } : r)));
+
+  return (
+    <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--bg-hover)" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ ...S.cardTitle, marginBottom: 0 }}>Day overrides</span>
+        <span style={{ fontSize: 12, color: "var(--text-2)" }}>
+          Optional — for clients split across two invoices. Applies to this run only;
+          the config workbook is not changed. Leave blank to use the workbook.
+        </span>
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
+        {rows.map((r, i) => (
+          <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="text" placeholder="Invoice name" value={r.name} disabled={disabled}
+              onChange={e => set(i, "name", e.target.value)}
+              style={{ ...S.select, width: 190, fontSize: 12 }} />
+            <input type="number" min="0" step="1" placeholder="days" value={r.days} disabled={disabled}
+              onChange={e => set(i, "days", e.target.value)}
+              style={{ ...S.select, width: 74, fontSize: 12, ...S.mono }} />
+          </div>
+        ))}
+        {rows.length < 6 && (
+          <button type="button" disabled={disabled}
+            onClick={() => setRows([...rows, { name: "", days: "" }])}
+            style={{ ...S.actionBtn, border: "none", background: "none", color: "var(--text-2)", padding: "4px 6px" }}>
+            + another
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// rows -> "Name=10; Other=43". A row needs BOTH halves to count: a name with no
+// number can't be an override, and a number with no name has nothing to apply
+// to — silently guessing either one would bill the wrong days.
+function buildDayOverrides(rows) {
+  return rows
+    .filter(r => r.name.trim() && String(r.days).trim() !== "")
+    .map(r => `${r.name.trim()}=${String(r.days).trim()}`)
+    .join("; ");
+}
+
+// Rendered with key={tool} so switching tabs REMOUNTS it. That resets the day
+// boxes (and the chosen file, which used to follow you from one tool's tab to
+// the next) without an effect that re-seeds state after the fact.
 function GenerateCard({ tool, billingMonth, latestRun, busy, onGenerate }) {
-  const [file, setFile] = useState(null);
-  const fileRef = useRef(null);
   const cfg = TOOLS.find(t => t.id === tool);
+  const [file, setFile] = useState(null);
+  const [dayRows, setDayRows] = useState(
+    () => (cfg?.dayOverrides ? loadDayNames(tool).map(name => ({ name, days: "" })) : []));
+  const fileRef = useRef(null);
   const runActive = latestRun && (latestRun.status === "queued" || latestRun.status === "running");
 
   if (!cfg?.upload) {
@@ -237,11 +317,27 @@ function GenerateCard({ tool, billingMonth, latestRun, busy, onGenerate }) {
         )}
 
         <button disabled={!canRun}
-          onClick={() => onGenerate(file).then(ok => { if (ok) { setFile(null); if (fileRef.current) fileRef.current.value = ""; } })}
+          onClick={() => {
+            const overrides = buildDayOverrides(dayRows);
+            if (cfg.dayOverrides) saveDayNames(tool, dayRows.map(r => r.name));
+            onGenerate(file, overrides).then(ok => {
+              if (ok) {
+                setFile(null);
+                if (fileRef.current) fileRef.current.value = "";
+                // Keep the names, clear the numbers — next month's counts are
+                // a fresh decision, not a repeat of this one.
+                setDayRows(rows => rows.map(r => ({ ...r, days: "" })));
+              }
+            });
+          }}
           style={{ ...S.actionBtn, background: canRun ? "var(--navy)" : "#94a3b8", color: "#fff", border: "none", padding: "8px 18px", fontSize: 13 }}>
           {busy ? "Starting…" : runActive ? "Run in progress" : "Generate invoices"}
         </button>
       </div>
+      {cfg.dayOverrides && (
+        <DayOverrideFields rows={dayRows} setRows={setDayRows}
+          disabled={busy || runActive} />
+      )}
       <RunStatusLine run={latestRun} />
       {runActive && (
         <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 6 }}>
@@ -892,7 +988,7 @@ export default function InvoicesDashboard({ userRole }) {
     }
   }
 
-  async function generateInvoices(file) {
+  async function generateInvoices(file, dayOverrides) {
     setRunBusy(true);
     try {
       let uploadId = null;
@@ -909,7 +1005,11 @@ export default function InvoicesDashboard({ userRole }) {
       const runRes = await fetch(`${API_BASE}/api/invoices/run`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tool: activeTool, upload_id: uploadId }),
+        body: JSON.stringify({
+          tool: activeTool,
+          upload_id: uploadId,
+          day_overrides: dayOverrides?.trim() || null,
+        }),
       });
       if (!runRes.ok) throw new Error((await runRes.json().catch(() => ({}))).detail || "Could not queue the run");
       const data = await runRes.json();
@@ -1193,7 +1293,8 @@ export default function InvoicesDashboard({ userRole }) {
 
       {/* Generate card — upload + run for this tool (admin only) */}
       {isAdmin && (
-        <GenerateCard tool={activeTool} billingMonth={billingMonth?.billing_month || "…"}
+        <GenerateCard key={activeTool} tool={activeTool}
+          billingMonth={billingMonth?.billing_month || "…"}
           latestRun={latestRunForTool} busy={runBusy} onGenerate={generateInvoices} />
       )}
 
