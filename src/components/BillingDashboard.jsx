@@ -1,694 +1,732 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 
-const API = import.meta.env.VITE_BILLING_API_URL || "https://web-production-3b1f4.up.railway.app";
+// ─────────────────────────────────────────────────────────────────────────────
+// Billing Overview — a single-page financial view.
+//
+// The audience is people who do NOT work in the billing system, so every number
+// here is a financial one. Operational exceptions (billing errors, early
+// departures, missed revenue) were removed 2026-08-20: they are a different job
+// for a different reader and get their own reconciliation screen.
+//
+// ONE PAGE, NO TABS. A tab is a place for a number to hide. The previous version
+// put "By Center", "Daily Rate", "AR" and "Weekly Trend" behind four tabs, so no
+// two of them were ever on screen together.
+//
+// Data: GET /api/billing/overview -> staging.fct_billing_overview (billed,
+// centres, funding sources, attendance) + staging.fct_revenue_cycle
+// (collections, sourced from the ODODD remittance files rather than Brittco's
+// stale `Paid` column). ONE request; the rules live in dbt, not in this file.
+//
+// COLLECTIONS ARE ORGANISATION-LEVEL. Billed knows the cost centre; collected
+// knows the Medicaid number and has never heard of one. Bridging the two by
+// client name reaches ~89% of dollars today, so there is deliberately no
+// per-centre "collected" column — a stakeholder page must not carry a number
+// that is quietly 10% light.
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function fmt$(n) {
-  if (n == null) return "—";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency", currency: "USD",
-    minimumFractionDigits: 0, maximumFractionDigits: 0,
-  }).format(n);
+const API =
+  import.meta.env.VITE_BILLING_API_URL ||
+  "https://web-production-3b1f4.up.railway.app";
+
+// ── Formatting ───────────────────────────────────────────────────────────────
+const money0 = new Intl.NumberFormat("en-US", {
+  style: "currency", currency: "USD",
+  minimumFractionDigits: 0, maximumFractionDigits: 0,
+});
+const money2 = new Intl.NumberFormat("en-US", {
+  style: "currency", currency: "USD",
+  minimumFractionDigits: 2, maximumFractionDigits: 2,
+});
+const counter = new Intl.NumberFormat("en-US");
+
+const fmt$ = (n) => (n == null ? "—" : money0.format(Number(n)));
+const fmt$2 = (n) => (n == null ? "—" : money2.format(Number(n)));
+const fmtN = (n) => (n == null ? "—" : counter.format(Number(n)));
+const fmtPct = (n) => (n == null ? "—" : `${Number(n).toFixed(1)}%`);
+
+// Parse as UTC. A bare `new Date("2026-08-01")` shifts backwards in western
+// timezones, which silently renames the month on every label.
+function ymd(v) {
+  if (!v) return null;
+  const [y, m, d] = String(v).slice(0, 10).split("-").map(Number);
+  if (!y || !m) return null;
+  return new Date(Date.UTC(y, m - 1, d || 1));
 }
-function fmtNum(n) {
-  if (n == null) return "—";
-  return new Intl.NumberFormat("en-US").format(n);
+function monthLabel(v) {
+  const d = ymd(v);
+  return d ? d.toLocaleDateString("en-US", { month: "short", timeZone: "UTC" }) : "";
 }
-function fmtPct(a, b) {
-  if (!b || b === 0) return "—";
-  const p = ((a - b) / Math.abs(b)) * 100;
-  return (p >= 0 ? "+" : "") + p.toFixed(1) + "%";
+function yearOf(v) {
+  return v ? String(v).slice(0, 4) : "";
 }
-function weekLabel(w) {
-  if (!w) return "";
-  const d = new Date(w);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-// ── Sparkline ─────────────────────────────────────────────────────────────────
-function Sparkline({ data, color = "#3b82f6", height = 40 }) {
-  if (!data || data.length < 2) return null;
-  const max = Math.max(...data);
-  const min = Math.min(...data);
-  const range = max - min || 1;
-  const w = 120, h = height;
-  const pts = data.map((v, i) => {
-    const x = (i / (data.length - 1)) * w;
-    const y = h - ((v - min) / range) * (h - 4) - 2;
-    return `${x},${y}`;
-  }).join(" ");
-  return (
-    <svg width={w} height={h} style={{ display: "block" }}>
-      <polyline points={pts} fill="none" stroke={color} strokeWidth="2"
-        strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-// ── Line chart ────────────────────────────────────────────────────────────────
-function LineChart({ weeks, height = 220 }) {
-  if (!weeks || weeks.length === 0) return (
-    <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af" }}>
-      No data
-    </div>
-  );
-
-  const W = "100%", H = height;
-  const PAD = { top: 16, right: 16, bottom: 40, left: 64 };
-  const billed = weeks.map(w => Number(w.total_billed) || 0);
-  const missed = weeks.map(w => Number(w.missed_revenue) || 0);
-  const allVals = [...billed, ...missed];
-  const maxV = Math.max(...allVals) || 1;
-
-  // Normalise to viewBox 0..1000 x 0..H
-  const VW = 1000;
-  const innerW = VW - PAD.left - PAD.right;
-  const innerH = H - PAD.top - PAD.bottom;
-
-  function toX(i) { return PAD.left + (i / (weeks.length - 1)) * innerW; }
-  function toY(v) { return PAD.top + innerH - (v / maxV) * innerH; }
-
-  function polyPts(vals) {
-    return vals.map((v, i) => `${toX(i)},${toY(v)}`).join(" ");
-  }
-
-  // Y axis ticks
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map(t => ({
-    v: t * maxV,
-    y: toY(t * maxV),
-  }));
-
-  // X axis labels (every ~4 weeks)
-  const step = Math.max(1, Math.floor(weeks.length / 8));
-  const xLabels = weeks
-    .map((w, i) => ({ i, label: weekLabel(w.attendance_week) }))
-    .filter((_, i) => i % step === 0);
-
-  return (
-    <svg viewBox={`0 0 ${VW} ${H}`} width="100%" height={H} style={{ overflow: "visible" }}>
-      {/* Grid lines */}
-      {ticks.map(t => (
-        <g key={t.v}>
-          <line x1={PAD.left} y1={t.y} x2={VW - PAD.right} y2={t.y}
-            stroke="#e5e7eb" strokeWidth="1" />
-          <text x={PAD.left - 8} y={t.y + 4} textAnchor="end"
-            fontSize="11" fill="#9ca3af">
-            {fmt$(t.v)}
-          </text>
-        </g>
-      ))}
-
-      {/* Missed revenue area */}
-      <polyline points={polyPts(missed)} fill="none"
-        stroke="#f87171" strokeWidth="2" strokeDasharray="4 3"
-        strokeLinejoin="round" strokeLinecap="round" />
-
-      {/* Billed line */}
-      <polyline points={polyPts(billed)} fill="none"
-        stroke="#3b82f6" strokeWidth="2.5"
-        strokeLinejoin="round" strokeLinecap="round" />
-
-      {/* X labels */}
-      {xLabels.map(({ i, label }) => (
-        <text key={i} x={toX(i)} y={H - 8} textAnchor="middle"
-          fontSize="11" fill="#9ca3af">
-          {label}
-        </text>
-      ))}
-
-      {/* Legend */}
-      <circle cx={PAD.left + 12} cy={PAD.top - 4} r="4" fill="#3b82f6" />
-      <text x={PAD.left + 20} y={PAD.top} fontSize="11" fill="#6b7280">Weekly Billed</text>
-      <line x1={PAD.left + 100} y1={PAD.top - 4} x2={PAD.left + 116} y2={PAD.top - 4}
-        stroke="#f87171" strokeWidth="2" strokeDasharray="4 3" />
-      <text x={PAD.left + 120} y={PAD.top} fontSize="11" fill="#6b7280">Missed Rev</text>
-    </svg>
-  );
+function dateLabel(v) {
+  const d = ymd(v);
+  return d
+    ? d.toLocaleDateString("en-US", {
+        month: "short", day: "numeric", year: "numeric", timeZone: "UTC",
+      })
+    : "—";
 }
 
-// ── KPI card ──────────────────────────────────────────────────────────────────
-function KPICard({ label, value, sub, sparkData, sparkColor, accent }) {
+// ── Measure the container so SVG text never scales with a viewBox ───────────
+function useWidth() {
+  const ref = useRef(null);
+  const [w, setW] = useState(720);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const ro = new ResizeObserver(([entry]) => {
+      const next = entry.contentRect.width;
+      if (next > 0) setW(next);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w];
+}
+
+// Round an axis top up so ticks land on numbers a person would say out loud.
+function niceMax(v) {
+  if (!v || v <= 0) return 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(v)));
+  const n = v / mag;
+  const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10;
+  return step * mag;
+}
+
+function EmptyPlot({ height }) {
   return (
     <div style={{
-      background: "#fff", borderRadius: 12, padding: "20px 24px",
-      boxShadow: "0 1px 3px rgba(0,0,0,0.08)", border: "1px solid #f3f4f6",
-      display: "flex", flexDirection: "column", gap: 4,
-      borderTop: `3px solid ${accent || "#3b82f6"}`,
+      height, display: "flex", alignItems: "center", justifyContent: "center",
+      color: "var(--viz-muted)", fontSize: 13,
     }}>
-      <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 500 }}>{label}</div>
-      <div style={{ fontSize: 28, fontWeight: 700, color: "#111827", letterSpacing: "-0.5px" }}>{value}</div>
-      {sub && <div style={{ fontSize: 12, color: "#9ca3af" }}>{sub}</div>}
-      {sparkData && <div style={{ marginTop: 8 }}><Sparkline data={sparkData} color={sparkColor} /></div>}
+      No data for this period
     </div>
   );
 }
 
-// ── Main dashboard ────────────────────────────────────────────────────────────
-export default function BillingDashboard({ userRole = "manager" }) {
-  const [summary, setSummary]     = useState(null);
-  const [centers, setCenters]     = useState([]);
-  const [weekly, setWeekly]       = useState([]);
-  const [errors, setErrors]       = useState([]);
-  const [earlyDepartures, setED]  = useState([]);   // admin-only review flag
-  const [dailyRate, setDailyRate] = useState(null); // { weeks:[], ytd:{} }
-  const [arBuckets, setArBuckets] = useState([]);   // AR by bucket
-  const [loading, setLoading]     = useState(true);
-  const [error, setError]         = useState(null);
-  const [tab, setTab]             = useState("overview");   // overview | weekly | errors | early-departures
-  const [startDate, setStart]     = useState("");
-  const [endDate, setEnd]         = useState("");
+// ── Line chart: 1–2 series over time, crosshair + tooltip ───────────────────
+// ONE y-axis, always. Two y-scales on one plot invent a correlation that is not
+// in the data. Billed and collected are both dollars, so they share this axis
+// honestly; anything on a different scale gets its own chart below.
+function TrendChart({ rows, series, height = 260, format = fmt$ }) {
+  const [ref, W] = useWidth();
+  const [hover, setHover] = useState(null);
 
-  function buildQS() {
-    const p = new URLSearchParams();
-    if (startDate) p.set("start", startDate);
-    if (endDate)   p.set("end",   endDate);
-    return p.toString() ? `?${p}` : "";
+  const PAD = { top: 18, right: 20, bottom: 34, left: 70 };
+  const plotW = Math.max(60, W - PAD.left - PAD.right);
+  const plotH = Math.max(40, height - PAD.top - PAD.bottom);
+
+  const max = useMemo(() => {
+    const vals = rows.flatMap((r) => series.map((s) => Number(r[s.key]) || 0));
+    return niceMax(Math.max(1, ...vals));
+  }, [rows, series]);
+
+  if (!rows.length) {
+    return <div ref={ref}><EmptyPlot height={height} /></div>;
   }
 
-  async function fetchAll() {
-    setLoading(true);
-    setError(null);
-    const qs = buildQS();
-    try {
-      // Always-on endpoints — use allSettled so one slow/failing endpoint
-      // doesn't blank the whole dashboard.
-      // Resilient fetch: credentials:"include" sends the auth cookie cross-origin
-      // (empoweredis.com -> Railway). Each call resolves to its JSON, or to null on
-      // ANY failure (non-2xx, network blip during a redeploy, non-JSON 500 body) —
-      // it never rejects, so one bad endpoint can't nuke the whole dashboard.
-      const getJSON = (path) =>
-        fetch(`${API}${path}${qs}`, { credentials: "include" })
-          .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
-          .catch(() => null);
-      const asArr = (v) => (Array.isArray(v) ? v : []);
+  const x = (i) => (rows.length === 1 ? plotW / 2 : (i / (rows.length - 1)) * plotW);
+  const y = (v) => plotH - ((Number(v) || 0) / max) * plotH;
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((t) => t * max);
+  const last = rows.length - 1;
 
-      const [sum, cen, wk, errs, dr, arb, ed] = await Promise.all([
-        getJSON("/api/billing/summary"),
-        getJSON("/api/billing/by-center"),
-        getJSON("/api/billing/weekly"),
-        getJSON("/api/billing/errors"),
-        getJSON("/api/billing/daily-rate"),
-        getJSON("/api/billing/ar"),
-        userRole === "admin" ? getJSON("/api/billing/early-departures") : Promise.resolve([]),
-      ]);
-
-      setSummary(sum);
-      setCenters(asArr(cen));
-      setWeekly(asArr(wk));
-      setErrors(asArr(errs));
-      setDailyRate(dr && Array.isArray(dr.weeks) ? dr : null);
-      setArBuckets(asArr(arb));
-      setED(asArr(ed));
-
-      // Only a hard error if nothing core loaded (most likely: not signed in).
-      if (sum == null && !asArr(cen).length && !asArr(wk).length) {
-        setError("Could not load billing data. Make sure you're signed in, then refresh.");
-      }
-    } catch (err) {
-      console.error("Billing API fetch failed:", err);
-      setError("Could not reach billing API.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { fetchAll(); }, []);
-
-  // Rolling averages for the weekly chart KPIs
-  const weeklyKPIs = useMemo(() => {
-    if (!weekly.length) return null;
-    const last = weekly[weekly.length - 1];
-    const recent4 = weekly.slice(-4);
-    const recent12 = weekly.slice(-12);
-    const avg4  = recent4.reduce((s, w) => s + Number(w.total_billed), 0) / recent4.length;
-    const avg12 = recent12.reduce((s, w) => s + Number(w.total_billed), 0) / recent12.length;
-    const allAvg = weekly.reduce((s, w) => s + Number(w.total_billed), 0) / weekly.length;
-    return { last: Number(last.total_billed), avg4, avg12, allAvg };
-  }, [weekly]);
-
-  const billedSparkline = weekly.map(w => Number(w.total_billed) || 0);
-  const missedSparkline = weekly.map(w => Number(w.missed_revenue) || 0);
-
-  if (loading) return (
-    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: 300, color: "#9ca3af" }}>
-      Loading billing data…
-    </div>
-  );
-
-  if (error) return (
-    <div style={{ padding: 32, textAlign: "center", color: "#ef4444" }}>
-      <div style={{ fontSize: 20, marginBottom: 8 }}>{error}</div>
-      <div style={{ fontSize: 13, color: "#9ca3af" }}>
-        If you’re signed in and this persists, try a hard refresh (Ctrl+Shift+R).
-      </div>
-    </div>
-  );
+  const onMove = (e) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    const px = e.clientX - box.left - PAD.left;
+    const i = Math.round((px / plotW) * last);
+    setHover(Math.max(0, Math.min(last, i)));
+  };
 
   return (
-    <div style={{ fontFamily: "system-ui, -apple-system, sans-serif", background: "#f9fafb", minHeight: "100vh", padding: "24px 32px" }}>
+    <div ref={ref} style={{ position: "relative" }}>
+      <svg
+        width="100%" height={height} role="img"
+        aria-label={series.map((s) => s.label).join(" and ") + " by month"}
+        onMouseMove={onMove} onMouseLeave={() => setHover(null)}
+        style={{ display: "block" }}
+      >
+        <g transform={`translate(${PAD.left},${PAD.top})`}>
+          {/* Solid hairline gridlines. Dashing reads as a threshold. */}
+          {ticks.map((t, i) => (
+            <g key={i}>
+              <line x1={0} x2={plotW} y1={y(t)} y2={y(t)}
+                stroke="var(--viz-grid)" strokeWidth="1" />
+              <text x={-10} y={y(t)} dy="0.32em" textAnchor="end"
+                fill="var(--viz-muted)" fontSize="11"
+                style={{ fontVariantNumeric: "tabular-nums" }}>
+                {format(t)}
+              </text>
+            </g>
+          ))}
 
-      {/* ── Header ── */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: "#111827" }}>Billing Overview</h1>
-          <div style={{ fontSize: 13, color: "#6b7280", marginTop: 2 }}>
-            {summary?.earliest_date && summary?.latest_date
-              ? `${summary.earliest_date} — ${summary.latest_date}`
-              : "All dates"}
-          </div>
-        </div>
+          {series.map((s) => (
+            <polyline key={s.key} fill="none" stroke={s.color} strokeWidth="2"
+              strokeLinejoin="round" strokeLinecap="round"
+              points={rows.map((r, i) => `${x(i)},${y(r[s.key])}`).join(" ")} />
+          ))}
 
-        {/* Date filter */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input type="date" value={startDate} onChange={e => setStart(e.target.value)}
-            style={inputStyle} />
-          <span style={{ color: "#9ca3af" }}>to</span>
-          <input type="date" value={endDate} onChange={e => setEnd(e.target.value)}
-            style={inputStyle} />
-          <button onClick={fetchAll} style={btnStyle}>Apply</button>
-          <button onClick={() => { setStart(""); setEnd(""); setTimeout(fetchAll, 0); }}
-            style={{ ...btnStyle, background: "#f3f4f6", color: "#374151" }}>
-            Clear
-          </button>
-        </div>
-      </div>
+          {/* Endpoint markers only. A dot with a number on every point is the
+              classic unreadable chart — the axis and tooltip carry the rest. */}
+          {series.map((s) => (
+            <circle key={s.key} cx={x(last)} cy={y(rows[last][s.key])} r="4"
+              fill={s.color} stroke="var(--viz-surface)" strokeWidth="2" />
+          ))}
 
-      {/* ── KPI row ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 24 }}>
-        <KPICard label="Total Billed"     value={fmt$(summary?.total_billed)}
-          sub={`${fmtNum(summary?.attendance_days)} service days`}
-          sparkData={billedSparkline} sparkColor="#3b82f6" accent="#3b82f6" />
-        <KPICard label="Attendance Days"  value={fmtNum(summary?.attendance_days)}
-          sub={`${fmtNum(summary?.unique_clients)} unique clients`}
-          accent="#10b981" />
-        <KPICard label="Daily Rate (YTD)" value={dailyRate?.ytd ? fmt$(dailyRate.ytd.daily_rate) : "—"}
-          sub={dailyRate?.ytd ? `${fmtNum(dailyRate.ytd.attendance)} attendance days` : "rev / person / day"}
-          accent="#0ea5e9" />
-        <KPICard label="Outstanding AR"   value={fmt$(arBuckets.reduce((s, b) => s + Number(b.unpaid || 0), 0))}
-          sub={`${fmt$(arBuckets.reduce((s, b) => s + Number(b.paid || 0), 0))} paid to date`}
-          accent="#ef4444" />
-        <KPICard label="Missed Revenue"   value={fmt$(summary?.total_missed_revenue)}
-          sub="Unbilled 15-min units"
-          sparkData={missedSparkline} sparkColor="#f87171" accent="#f87171" />
-        <KPICard label="Billing Errors"   value={fmtNum(errors.length)}
-          sub={`${errors.filter(e => e.error_type === "Transport Error").length} transport · ${errors.filter(e => e.error_type === "Invalid Units").length} invalid units`}
-          accent="#f59e0b" />
-        {userRole === "admin" && (
-          <KPICard label="Early Departures" value={fmtNum(earlyDepartures.length)}
-            sub="2 trips + 3-19 service units · review needed"
-            accent="#a855f7" />
-        )}
-      </div>
-
-      {/* ── Tabs ── */}
-      <div style={{ display: "flex", gap: 2, marginBottom: 20, borderBottom: "2px solid #e5e7eb" }}>
-        {[
-          ["overview",   "By Center"],
-          ["daily-rate", "Daily Rate"],
-          ["ar",         "AR"],
-          ["weekly",     "Weekly Trend"],
-          ...(userRole === "admin" ? [["errors", "Errors"], ["early-departures", "Early Departures"]] : []),
-        ].map(([id, label]) => (
-          <button key={id} onClick={() => setTab(id)} style={{
-            padding: "8px 18px", fontSize: 14, fontWeight: tab === id ? 600 : 400,
-            color: tab === id ? "#3b82f6" : "#6b7280",
-            background: "none", border: "none", cursor: "pointer",
-            borderBottom: tab === id ? "2px solid #3b82f6" : "2px solid transparent",
-            marginBottom: -2,
-          }}>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* ── Overview tab: by-center table ── */}
-      {tab === "overview" && (
-        <div style={cardStyle}>
-          <div style={cardHeadStyle}>Billing by Cost Center</div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-              <thead>
-                <tr style={{ background: "#f9fafb", borderBottom: "2px solid #e5e7eb" }}>
-                  {["Center", "Total Billed", "Missed Rev", "RPC", "Att. Count"].map(h => (
-                    <th key={h} style={thStyle}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {centers.map((c, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid #f3f4f6" }}
-                    onMouseEnter={e => e.currentTarget.style.background = "#f9fafb"}
-                    onMouseLeave={e => e.currentTarget.style.background = ""}>
-                    <td style={{ ...tdStyle, fontWeight: 600, color: "#111827" }}>{c.cost_center || "—"}</td>
-                    <td style={tdStyle}>{fmt$(c.total_billed)}</td>
-                    <td style={{ ...tdStyle, color: c.missed_revenue > 0 ? "#ef4444" : "#111827" }}>
-                      {fmt$(c.missed_revenue)}
-                    </td>
-                    <td style={tdStyle}>{fmt$(c.rpc)}</td>
-                    <td style={tdStyle}>{fmtNum(c.attendance_count)}</td>
-                  </tr>
-                ))}
-                {/* Total row */}
-                <tr style={{ borderTop: "2px solid #e5e7eb", fontWeight: 700, background: "#f9fafb" }}>
-                  <td style={tdStyle}>Total</td>
-                  <td style={tdStyle}>{fmt$(centers.reduce((s, c) => s + Number(c.total_billed), 0))}</td>
-                  <td style={{ ...tdStyle, color: "#ef4444" }}>{fmt$(centers.reduce((s, c) => s + Number(c.missed_revenue), 0))}</td>
-                  <td style={tdStyle}>—</td>
-                  <td style={tdStyle}>{fmtNum(centers.reduce((s, c) => s + Number(c.attendance_count), 0))}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* ── Daily Rate tab ── */}
-      {tab === "daily-rate" && (
-        <div style={cardStyle}>
-          <div style={cardHeadStyle}>Daily Rate — revenue per person per day (Mon–Sun weeks · excludes OSL &amp; orphan trips)</div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: "#f9fafb", borderBottom: "2px solid #e5e7eb" }}>
-                  {["Week of", "Billed", "Attendance", "Daily Rate", "Paid", "Unpaid"].map(h => (
-                    <th key={h} style={thStyle}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {(dailyRate?.weeks ? [...dailyRate.weeks].reverse() : []).map((w, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid #f3f4f6" }}
-                    onMouseEnter={e => e.currentTarget.style.background = "#f9fafb"}
-                    onMouseLeave={e => e.currentTarget.style.background = ""}>
-                    <td style={{ ...tdStyle, fontWeight: 500 }}>{weekLabel(w.week_start)}</td>
-                    <td style={tdStyle}>{fmt$(w.billed)}</td>
-                    <td style={tdStyle}>{fmtNum(w.attendance)}</td>
-                    <td style={{ ...tdStyle, fontWeight: 600, color: "#0ea5e9" }}>{fmt$(w.daily_rate)}</td>
-                    <td style={tdStyle}>{fmt$(w.paid)}</td>
-                    <td style={{ ...tdStyle, color: Number(w.unpaid) > 0 ? "#ef4444" : "#111827" }}>{fmt$(w.unpaid)}</td>
-                  </tr>
-                ))}
-                {dailyRate?.ytd && (
-                  <tr style={{ borderTop: "2px solid #e5e7eb", fontWeight: 700, background: "#f9fafb" }}>
-                    <td style={tdStyle}>YTD</td>
-                    <td style={tdStyle}>{fmt$(dailyRate.ytd.billed)}</td>
-                    <td style={tdStyle}>{fmtNum(dailyRate.ytd.attendance)}</td>
-                    <td style={{ ...tdStyle, color: "#0ea5e9" }}>{fmt$(dailyRate.ytd.daily_rate)}</td>
-                    <td style={tdStyle}>{fmt$(dailyRate.ytd.paid)}</td>
-                    <td style={{ ...tdStyle, color: "#ef4444" }}>{fmt$(dailyRate.ytd.unpaid)}</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* ── AR tab ── */}
-      {tab === "ar" && (
-        <div style={cardStyle}>
-          <div style={cardHeadStyle}>Accounts Receivable by bucket</div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-              <thead>
-                <tr style={{ background: "#f9fafb", borderBottom: "2px solid #e5e7eb" }}>
-                  {["Bucket", "Billed", "Paid", "Unpaid (AR)", "% Collected"].map(h => (
-                    <th key={h} style={thStyle}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {arBuckets.map((b, i) => {
-                  const billed = Number(b.billed || 0), paid = Number(b.paid || 0);
-                  const pct = billed ? Math.round((paid / billed) * 100) : 0;
-                  return (
-                    <tr key={i} style={{ borderBottom: "1px solid #f3f4f6" }}
-                      onMouseEnter={e => e.currentTarget.style.background = "#f9fafb"}
-                      onMouseLeave={e => e.currentTarget.style.background = ""}>
-                      <td style={{ ...tdStyle, fontWeight: 600, color: "#111827" }}>{b.ar_bucket}</td>
-                      <td style={tdStyle}>{fmt$(b.billed)}</td>
-                      <td style={tdStyle}>{fmt$(b.paid)}</td>
-                      <td style={{ ...tdStyle, color: "#ef4444", fontWeight: 600 }}>{fmt$(b.unpaid)}</td>
-                      <td style={tdStyle}>{pct}%</td>
-                    </tr>
-                  );
-                })}
-                <tr style={{ borderTop: "2px solid #e5e7eb", fontWeight: 700, background: "#f9fafb" }}>
-                  <td style={tdStyle}>Total</td>
-                  <td style={tdStyle}>{fmt$(arBuckets.reduce((s, b) => s + Number(b.billed || 0), 0))}</td>
-                  <td style={tdStyle}>{fmt$(arBuckets.reduce((s, b) => s + Number(b.paid || 0), 0))}</td>
-                  <td style={{ ...tdStyle, color: "#ef4444" }}>{fmt$(arBuckets.reduce((s, b) => s + Number(b.unpaid || 0), 0))}</td>
-                  <td style={tdStyle}>—</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div style={{ padding: "10px 16px", fontSize: 12, color: "#6b7280", lineHeight: 1.5 }}>
-            <strong>Waiver</strong> = regular waiver we can correct in-system and resubmit (in our control).{" "}
-            <strong>External</strong> = waiting on the payer — a county check (Local) or private pay.
-          </div>
-        </div>
-      )}
-
-      {/* ── Weekly tab ── */}
-      {tab === "weekly" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-
-          {/* Rolling avg KPI row */}
-          {weeklyKPIs && (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
-              <KPICard label="Last Week"        value={fmt$(weeklyKPIs.last)}  accent="#3b82f6" />
-              <KPICard label="Avg Last Month"   value={fmt$(weeklyKPIs.avg4)}
-                sub={fmtPct(weeklyKPIs.last, weeklyKPIs.avg4) + " vs last week"} accent="#8b5cf6" />
-              <KPICard label="Avg Last 3 Months" value={fmt$(weeklyKPIs.avg12)} accent="#10b981" />
-              <KPICard label="All-Time Avg"     value={fmt$(weeklyKPIs.allAvg)} accent="#f59e0b" />
-            </div>
+          {hover != null && (
+            <g>
+              <line x1={x(hover)} x2={x(hover)} y1={0} y2={plotH}
+                stroke="var(--viz-axis)" strokeWidth="1" />
+              {series.map((s) => (
+                <circle key={s.key} cx={x(hover)} cy={y(rows[hover][s.key])} r="5"
+                  fill={s.color} stroke="var(--viz-surface)" strokeWidth="2" />
+              ))}
+            </g>
           )}
 
-          {/* Line chart */}
-          <div style={cardStyle}>
-            <div style={cardHeadStyle}>Weekly Billing Trend</div>
-            <LineChart weeks={weekly} height={220} />
-          </div>
+          <line x1={0} x2={plotW} y1={plotH} y2={plotH}
+            stroke="var(--viz-axis)" strokeWidth="1" />
+          {rows.map((r, i) => (
+            <text key={i} x={x(i)} y={plotH + 18} textAnchor="middle"
+              fill="var(--viz-muted)" fontSize="11">
+              {monthLabel(r.service_month)}
+            </text>
+          ))}
+        </g>
+      </svg>
 
-          {/* Weekly detail table */}
-          <div style={cardStyle}>
-            <div style={cardHeadStyle}>Week-by-Week Detail</div>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: "#f9fafb", borderBottom: "2px solid #e5e7eb" }}>
-                    {["Week", "Total Billed", "Adult Day", "NMT", "Missed Rev", "Units", "Errors"].map(h => (
-                      <th key={h} style={thStyle}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...weekly].reverse().map((w, i) => (
-                    <tr key={i} style={{ borderBottom: "1px solid #f3f4f6" }}
-                      onMouseEnter={e => e.currentTarget.style.background = "#f9fafb"}
-                      onMouseLeave={e => e.currentTarget.style.background = ""}>
-                      <td style={{ ...tdStyle, fontWeight: 500 }}>{weekLabel(w.attendance_week)}</td>
-                      <td style={tdStyle}>{fmt$(w.total_billed)}</td>
-                      <td style={tdStyle}>{fmt$(w.adult_day_billed)}</td>
-                      <td style={tdStyle}>{fmt$(w.nmt_billed)}</td>
-                      <td style={{ ...tdStyle, color: Number(w.missed_revenue) > 0 ? "#ef4444" : "#111827" }}>
-                        {fmt$(w.missed_revenue)}
-                      </td>
-                      <td style={tdStyle}>{fmtNum(w.total_units)}</td>
-                      <td style={{ ...tdStyle, color: (Number(w.transport_errors) + Number(w.invalid_units)) > 0 ? "#f59e0b" : "#111827" }}>
-                        {Number(w.transport_errors) + Number(w.invalid_units)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      {hover != null && (
+        <div style={{
+          position: "absolute",
+          left: Math.max(8, Math.min(W - 196, PAD.left + x(hover) + 12)),
+          top: PAD.top, pointerEvents: "none",
+          background: "var(--viz-surface)", border: "1px solid var(--viz-border)",
+          borderRadius: 8, padding: "8px 10px", fontSize: 12, minWidth: 156,
+          boxShadow: "0 4px 14px rgba(0,0,0,.10)", zIndex: 5,
+        }}>
+          <div style={{ color: "var(--viz-text-2)", marginBottom: 6 }}>
+            {monthLabel(rows[hover].service_month)} {yearOf(rows[hover].service_month)}
+          </div>
+          {series.map((s) => (
+            <div key={s.key} style={{
+              display: "flex", alignItems: "center", gap: 10,
+              justifyContent: "space-between", marginTop: 3,
+            }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{
+                  width: 9, height: 9, borderRadius: 2, background: s.color,
+                  display: "inline-block", flexShrink: 0,
+                }} />
+                <span style={{ color: "var(--viz-text-2)" }}>{s.label}</span>
+              </span>
+              <strong style={{
+                color: "var(--viz-text-1)", fontVariantNumeric: "tabular-nums",
+              }}>
+                {format(rows[hover][s.key])}
+              </strong>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Ranked horizontal bars ───────────────────────────────────────────────────
+// ONE colour for every bar. Shading each bar darker-where-bigger encodes the
+// same number twice and spends the only free channel on nothing.
+function RankedBars({ rows, labelKey, valueKey, extra }) {
+  if (!rows || !rows.length) return <EmptyPlot height={120} />;
+  const max = Math.max(...rows.map((r) => Number(r[valueKey]) || 0), 1);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+      {rows.map((r) => {
+        const v = Number(r[valueKey]) || 0;
+        return (
+          <div key={String(r[labelKey])}>
+            <div style={{
+              display: "flex", justifyContent: "space-between",
+              alignItems: "baseline", gap: 12, marginBottom: 4,
+            }}>
+              <span style={{
+                fontSize: 13, color: "var(--viz-text-1)", fontWeight: 500,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>
+                {r[labelKey]}
+              </span>
+              <span style={{
+                fontSize: 13, color: "var(--viz-text-1)", flexShrink: 0,
+                fontVariantNumeric: "tabular-nums",
+              }}>
+                {fmt$(v)}
+                {extra && (
+                  <span style={{ color: "var(--viz-muted)", marginLeft: 8 }}>
+                    {extra(r)}
+                  </span>
+                )}
+              </span>
+            </div>
+            {/* Thin mark, 4px rounded data-end, anchored to the baseline. */}
+            <div style={{
+              height: 8, background: "var(--viz-track)", borderRadius: 4,
+            }}>
+              <div style={{
+                width: `${Math.max((v / max) * 100, 0.5)}%`, height: "100%",
+                background: "var(--viz-s1)", borderRadius: 4,
+              }} />
             </div>
           </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Pieces ───────────────────────────────────────────────────────────────────
+function Stat({ label, value, sub, tone }) {
+  return (
+    <div style={{
+      background: "var(--viz-surface)", border: "1px solid var(--viz-border)",
+      borderRadius: 12, padding: "16px 18px", minWidth: 0,
+    }}>
+      <div style={{
+        fontSize: 11, color: "var(--viz-text-2)", fontWeight: 600,
+        textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 8,
+      }}>
+        {label}
+      </div>
+      {/* Proportional figures on purpose — tabular-nums makes a large
+          standalone number look loose. Tabular is for columns, in tables. */}
+      <div style={{
+        fontSize: 27, fontWeight: 650, lineHeight: 1.12,
+        color: tone || "var(--viz-text-1)", wordBreak: "break-word",
+      }}>
+        {value}
+      </div>
+      {sub && (
+        <div style={{
+          fontSize: 12, color: "var(--viz-text-2)", marginTop: 6, lineHeight: 1.35,
+        }}>
+          {sub}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Card({ title, note, children }) {
+  return (
+    <section style={{
+      background: "var(--viz-surface)", border: "1px solid var(--viz-border)",
+      borderRadius: 12, padding: 18, minWidth: 0,
+    }}>
+      <header style={{ marginBottom: 14 }}>
+        <h3 style={{
+          margin: 0, fontSize: 14, fontWeight: 650, color: "var(--viz-text-1)",
+        }}>
+          {title}
+        </h3>
+        {note && (
+          <p style={{
+            margin: "5px 0 0", fontSize: 12, color: "var(--viz-text-2)",
+            lineHeight: 1.45,
+          }}>
+            {note}
+          </p>
+        )}
+      </header>
+      {children}
+    </section>
+  );
+}
+
+// A legend is always present for 2+ series, so identity is never colour-alone.
+// A single series needs none — the card title names it.
+function Legend({ series }) {
+  if (series.length < 2) return null;
+  return (
+    <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 10 }}>
+      {series.map((s) => (
+        <span key={s.key} style={{
+          display: "flex", alignItems: "center", gap: 6,
+          fontSize: 12, color: "var(--viz-text-2)",
+        }}>
+          <span style={{
+            width: 10, height: 10, borderRadius: 2, background: s.color,
+          }} />
+          {s.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+export default function BillingDashboard({ onBack }) {
+  const [data, setData] = useState(null);
+  const [year, setYear] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
+  const [showTable, setShowTable] = useState(false);
+  const loadedOnce = useRef(false);
+
+  const load = useCallback(async (y) => {
+    // Hold the previous render while refetching. A skeleton flash on every year
+    // change is a layout jump that carries no information.
+    if (loadedOnce.current) setRefreshing(true);
+    else setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `${API}/api/billing/overview${y ? `?year=${y}` : ""}`,
+        { credentials: "include" }
+      );
+      if (!res.ok) throw new Error(String(res.status));
+      const json = await res.json();
+      setData(json);
+      loadedOnce.current = true;
+      if (y == null) setYear(json.year);
+    } catch (e) {
+      setError(
+        e.message === "401" || e.message === "403"
+          ? "Not signed in. Sign in, then refresh this page."
+          : "Could not load billing data. If this persists, try a hard refresh."
+      );
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => { load(null); }, [load]);
+
+  const trendSeries = useMemo(() => ([
+    { key: "billed", label: "Billed", color: "var(--viz-s1)" },
+    { key: "collected", label: "Collected", color: "var(--viz-s2)" },
+  ]), []);
+  const rateSeries = useMemo(() => ([
+    { key: "daily_rate", label: "Revenue per day", color: "var(--viz-s1)" },
+  ]), []);
+
+  const k = data?.kpis || {};
+  const c = data?.collections || {};
+  const monthly = data?.monthly || [];
+  const centers = data?.centers || [];
+  const sourceTotal = (data?.sources || [])
+    .reduce((a, s) => a + Number(s.billed || 0), 0);
+
+  return (
+    <div className="viz-root">
+      <style>{`
+        .viz-root {
+          color-scheme: light;
+          --viz-plane:   #f9f9f7;
+          --viz-surface: #fcfcfb;
+          --viz-text-1:  #0b0b0b;
+          --viz-text-2:  #52514e;
+          --viz-muted:   #898781;
+          --viz-grid:    #e1e0d9;
+          --viz-axis:    #c3c2b7;
+          --viz-border:  rgba(11,11,11,0.10);
+          --viz-track:   #eceae3;
+          --viz-s1:      #2a78d6;
+          --viz-s2:      #eb6834;
+          --viz-good:    #006300;
+          background: var(--viz-plane);
+          color: var(--viz-text-1);
+          min-height: 100vh;
+          padding: 20px clamp(12px, 3vw, 32px) 48px;
+          /* The app's own brand sans (--font-sans is set on the App root); the
+             stack is the fallback for when this component renders standalone.
+             One face everywhere, including the large stat values — a display or
+             serif figure would read as off-brand decoration. */
+          font-family: var(--font-sans, "IBM Plex Sans"), system-ui,
+                       -apple-system, "Segoe UI", sans-serif;
+        }
+        @media (prefers-color-scheme: dark) {
+          :root:where(:not([data-theme="light"])) .viz-root {
+            color-scheme: dark;
+            --viz-plane:   #0d0d0d;
+            --viz-surface: #1a1a19;
+            --viz-text-1:  #ffffff;
+            --viz-text-2:  #c3c2b7;
+            --viz-muted:   #898781;
+            --viz-grid:    #2c2c2a;
+            --viz-axis:    #383835;
+            --viz-border:  rgba(255,255,255,0.10);
+            --viz-track:   #2c2c2a;
+            --viz-s1:      #3987e5;
+            --viz-s2:      #d95926;
+            --viz-good:    #0ca30c;
+          }
+        }
+        :root[data-theme="dark"] .viz-root {
+          color-scheme: dark;
+          --viz-plane:   #0d0d0d;
+          --viz-surface: #1a1a19;
+          --viz-text-1:  #ffffff;
+          --viz-text-2:  #c3c2b7;
+          --viz-muted:   #898781;
+          --viz-grid:    #2c2c2a;
+          --viz-axis:    #383835;
+          --viz-border:  rgba(255,255,255,0.10);
+          --viz-track:   #2c2c2a;
+          --viz-s1:      #3987e5;
+          --viz-s2:      #d95926;
+          --viz-good:    #0ca30c;
+        }
+        .viz-kpis {
+          display: grid; gap: 12px; grid-template-columns: repeat(2, 1fr);
+        }
+        @media (min-width: 700px) {
+          .viz-kpis { grid-template-columns: repeat(3, 1fr); }
+        }
+        @media (min-width: 1080px) {
+          .viz-kpis { grid-template-columns: repeat(5, 1fr); }
+        }
+        .viz-two { display: grid; gap: 16px; grid-template-columns: 1fr; }
+        @media (min-width: 900px) {
+          .viz-two { grid-template-columns: 1fr 1fr; }
+        }
+        .viz-btn {
+          background: var(--viz-surface); color: var(--viz-text-1);
+          border: 1px solid var(--viz-border); border-radius: 8px;
+          padding: 6px 12px; font-size: 13px; cursor: pointer;
+          font-family: inherit;
+        }
+        .viz-btn:hover { background: var(--viz-track); }
+        .viz-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .viz-table th, .viz-table td {
+          padding: 8px 10px; text-align: right;
+          border-bottom: 1px solid var(--viz-grid); white-space: nowrap;
+        }
+        .viz-table th:first-child, .viz-table td:first-child { text-align: left; }
+        .viz-table td { font-variant-numeric: tabular-nums; color: var(--viz-text-1); }
+        .viz-table th {
+          color: var(--viz-text-2); font-weight: 600; font-size: 12px;
+        }
+      `}</style>
+
+      {/* ── Header + the ONE filter row, above everything it scopes ────────── */}
+      <header style={{
+        display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end",
+        justifyContent: "space-between", marginBottom: 20,
+      }}>
+        <div>
+          {onBack && (
+            <button onClick={onBack} className="viz-btn"
+              style={{ marginBottom: 10, padding: "5px 11px" }}>
+              ← Back
+            </button>
+          )}
+          <h1 style={{ margin: 0, fontSize: 24, fontWeight: 680 }}>
+            Billing Overview
+          </h1>
+          {data && (
+            <p style={{
+              margin: "6px 0 0", fontSize: 13, color: "var(--viz-text-2)",
+            }}>
+              {year} year to date
+              {c.data_as_of && ` · payment data as of ${dateLabel(c.data_as_of)}`}
+            </p>
+          )}
+        </div>
+
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {(data?.years || []).length > 1 && (
+            <select
+              className="viz-btn" value={year || ""}
+              onChange={(e) => {
+                const y = Number(e.target.value);
+                setYear(y);
+                load(y);
+              }}
+            >
+              {data.years.map((y) => <option key={y} value={y}>{y}</option>)}
+            </select>
+          )}
+          <button className="viz-btn" onClick={() => setShowTable((v) => !v)}>
+            {showTable ? "Hide table" : "Table view"}
+          </button>
+        </div>
+      </header>
+
+      {loading && (
+        <p style={{ color: "var(--viz-text-2)", fontSize: 14 }}>
+          Loading billing data…
+        </p>
+      )}
+
+      {error && !loading && (
+        <div style={{
+          background: "var(--viz-surface)", border: "1px solid var(--viz-border)",
+          borderRadius: 12, padding: 18, fontSize: 14,
+        }}>
+          {error}
         </div>
       )}
 
-      {/* ── Errors tab ── */}
-      {tab === "errors" && (
-        <div style={cardStyle}>
-          <div style={cardHeadStyle}>Billing Errors ({errors.length})</div>
-          {errors.length === 0
-            ? <div style={{ padding: 32, textAlign: "center", color: "#9ca3af" }}>No errors found</div>
-            : (
+      {data && !error && (
+        <div style={{
+          opacity: refreshing ? 0.55 : 1, transition: "opacity .15s",
+          display: "flex", flexDirection: "column", gap: 16,
+        }}>
+          {/* ── KPI row ─────────────────────────────────────────────────────── */}
+          <div className="viz-kpis">
+            <Stat label="Billed" value={fmt$(k.billed)}
+              sub={`${fmtN(k.billed_lines)} service lines`} />
+            <Stat label="Collected" value={fmt$(c.paid)}
+              tone="var(--viz-good)"
+              sub={k.collection_rate != null
+                ? `${fmtPct(k.collection_rate)} of billed`
+                : null} />
+            <Stat label="Revenue per day" value={fmt$2(k.daily_rate)}
+              sub="Billed ÷ attendance days" />
+            <Stat label="Attendance days" value={fmtN(k.attendance_days)}
+              sub="Client-days of adult day" />
+            <Stat label="Past due" value={fmt$(c.chaseable)}
+              sub={Number(c.awaiting_file) > 0
+                ? `${fmt$(c.awaiting_file)} more not yet adjudicated`
+                : "Payment is overdue"} />
+          </div>
+
+          {/* ── Hero chart ──────────────────────────────────────────────────── */}
+          <Card
+            title="Billed vs collected by month"
+            note="Collected comes from the payer's own remittance files, not from the billing system's paid column. The most recent months are still inside the normal payment cycle, so a gap there is expected."
+          >
+            <Legend series={trendSeries} />
+            <TrendChart rows={monthly} series={trendSeries} height={280} />
+          </Card>
+
+          <div className="viz-two">
+            <Card title="Revenue per day"
+              note="Billed excluding residential per-diem, divided by client-days attended.">
+              <TrendChart rows={monthly} series={rateSeries} height={210}
+                format={(v) => money0.format(v)} />
+            </Card>
+
+            <Card title="Where the money comes from"
+              note="Funding source, by billed dollars.">
+              <RankedBars
+                rows={data.sources} labelKey="funding_source" valueKey="billed"
+                extra={(r) => (sourceTotal
+                  ? `${((Number(r.billed) / sourceTotal) * 100).toFixed(1)}%`
+                  : "")} />
+            </Card>
+          </div>
+
+          <div className="viz-two">
+            <Card title="Billed by center"
+              note="Revenue per day shown beside each center.">
+              <RankedBars rows={centers} labelKey="center_name" valueKey="billed"
+                extra={(r) => `${fmt$2(r.daily_rate)}/day`} />
+            </Card>
+
+            <Card title="Service mix" note="Gross billed by service type.">
+              <RankedBars rows={data.service_mix} labelKey="service_family"
+                valueKey="billed" />
+            </Card>
+          </div>
+
+          {/* ── Collections ─────────────────────────────────────────────────── */}
+          <Card
+            title="Collections"
+            note={`Submitted to the payer and adjudicated. Payment files run through ${dateLabel(c.paid_through)} — anything after that has not been downloaded yet and is not late.`}
+          >
+            <div className="viz-kpis" style={{ marginBottom: 16 }}>
+              <Stat label="Submitted" value={fmt$(c.submitted)} />
+              <Stat label="Paid" value={fmt$(c.paid)} tone="var(--viz-good)" />
+              <Stat label="Denied" value={fmt$(c.denied)} />
+              <Stat label="Not yet adjudicated" value={fmt$(c.awaiting_file)}
+                sub="Inside the normal cycle" />
+              <Stat label="Past due" value={fmt$(c.chaseable)}
+                sub="Genuinely chaseable" />
+            </div>
+
+            {(data.aging || []).length > 0 && (
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <table className="viz-table">
                   <thead>
-                    <tr style={{ background: "#f9fafb", borderBottom: "2px solid #e5e7eb" }}>
-                      {["Type", "Client", "Date", "Code", "Center", "Units", "Billed"].map(h => (
-                        <th key={h} style={thStyle}>{h}</th>
-                      ))}
+                    <tr>
+                      <th>Age from due date</th><th>Lines</th><th>Outstanding</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {errors.map((e, i) => (
-                      <tr key={i} style={{ borderBottom: "1px solid #f3f4f6" }}
-                        onMouseEnter={r => r.currentTarget.style.background = "#fef9f0"}
-                        onMouseLeave={r => r.currentTarget.style.background = ""}>
-                        <td style={{ ...tdStyle }}>
-                          <span style={{
-                            padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
-                            background: e.error_type === "Transport Error" ? "#fef3c7" : "#fee2e2",
-                            color:      e.error_type === "Transport Error" ? "#92400e" : "#991b1b",
-                          }}>
-                            {e.error_type}
-                          </span>
-                        </td>
-                        <td style={{ ...tdStyle, fontWeight: 500 }}>{e.client_name}</td>
-                        <td style={tdStyle}>{e.attendance_date}</td>
-                        <td style={tdStyle}><code>{e.service_code}</code></td>
-                        <td style={tdStyle}>{e.cost_center}</td>
-                        <td style={tdStyle}>{e.units}</td>
-                        <td style={tdStyle}>{fmt$(e.billed_amount)}</td>
+                    {data.aging.map((a) => (
+                      <tr key={a.ar_bucket}>
+                        <td>{a.ar_bucket}</td>
+                        <td>{fmtN(a.lines)}</td>
+                        <td>{fmt$2(a.outstanding)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             )}
+          </Card>
+
+          {/* ── Table view: every charted value, reachable without colour ──── */}
+          {showTable && (
+            <Card title="Table view" note="Every value shown above, as numbers.">
+              <div style={{ overflowX: "auto" }}>
+                <table className="viz-table">
+                  <thead>
+                    <tr>
+                      <th>Month</th><th>Billed</th><th>Collected</th>
+                      <th>Attendance days</th><th>Revenue per day</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {monthly.map((m) => (
+                      <tr key={m.service_month}>
+                        <td>{monthLabel(m.service_month)} {yearOf(m.service_month)}</td>
+                        <td>{fmt$2(m.billed)}</td>
+                        <td>{fmt$2(m.collected)}</td>
+                        <td>{fmtN(m.attendance_days)}</td>
+                        <td>{fmt$2(m.daily_rate)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{ overflowX: "auto", marginTop: 22 }}>
+                <table className="viz-table">
+                  <thead>
+                    <tr>
+                      <th>Center</th><th>Billed</th><th>Attendance days</th>
+                      <th>Clients</th><th>Revenue per day</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {centers.map((r) => (
+                      <tr key={r.center_name}>
+                        <td>{r.center_name}</td>
+                        <td>{fmt$2(r.billed)}</td>
+                        <td>{fmtN(r.attendance_days)}</td>
+                        <td>{fmtN(r.clients)}</td>
+                        <td>{fmt$2(r.daily_rate)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+
+          <footer style={{
+            fontSize: 12, color: "var(--viz-text-2)", padding: "4px 2px 0",
+            lineHeight: 1.5,
+          }}>
+            Billed excludes residential per-diem ({fmt$(k.osl_billed)} in {year});
+            gross billed including it is {fmt$(k.gross_billed)}. Collections are
+            organisation-wide and are not split by center.
+          </footer>
         </div>
       )}
-
-      {/* ── Early Departures tab (admin only) ── */}
-      {tab === "early-departures" && userRole === "admin" && (() => {
-        // Roll up by center for the summary strip
-        const byCenter = earlyDepartures.reduce((acc, r) => {
-          const k = r.cost_center || "Unknown";
-          acc[k] = (acc[k] || 0) + 1;
-          return acc;
-        }, {});
-        const byClient = earlyDepartures.reduce((acc, r) => {
-          acc[r.client_name] = (acc[r.client_name] || 0) + 1;
-          return acc;
-        }, {});
-        const topClients = Object.entries(byClient)
-          .sort((a, b) => b[1] - a[1])
-          .filter(([, n]) => n >= 2)   // surface repeat offenders only
-          .slice(0, 5);
-
-        return (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {/* Plain-language explainer */}
-            <div style={{
-              ...cardStyle, padding: "14px 20px", fontSize: 13, color: "#374151",
-              borderLeft: "4px solid #a855f7",
-            }}>
-              <strong style={{ color: "#6b21a8" }}>Heads-up, not an error.</strong>{" "}
-              These are client-days with a full round trip (2 NMT trips) but only
-              3-19 units of day-service billed — meaning the client was likely
-              picked up but driven home before the day was over. Worth a
-              conversation with the driver or center manager, not a billing
-              correction.
-            </div>
-
-            {/* By-center summary */}
-            {earlyDepartures.length > 0 && (
-              <div style={cardStyle}>
-                <div style={cardHeadStyle}>Flags by Center</div>
-                <div style={{ padding: "8px 12px", display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {Object.entries(byCenter)
-                    .sort((a, b) => b[1] - a[1])
-                    .map(([center, n]) => (
-                      <span key={center} style={{
-                        padding: "4px 12px", borderRadius: 16, fontSize: 12,
-                        background: "#f3e8ff", color: "#6b21a8", fontWeight: 600,
-                      }}>
-                        {center}: {n}
-                      </span>
-                    ))}
-                </div>
-              </div>
-            )}
-
-            {/* Repeat-offender callout */}
-            {topClients.length > 0 && (
-              <div style={cardStyle}>
-                <div style={cardHeadStyle}>Repeat Flags (2+ days in this window)</div>
-                <div style={{ padding: "8px 12px" }}>
-                  {topClients.map(([client, n]) => (
-                    <div key={client} style={{
-                      display: "flex", justifyContent: "space-between",
-                      padding: "6px 8px", fontSize: 13,
-                      borderBottom: "1px solid #f3f4f6",
-                    }}>
-                      <span style={{ fontWeight: 500 }}>{client}</span>
-                      <span style={{ color: "#a855f7", fontWeight: 600 }}>{n} days</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Detail table */}
-            <div style={cardStyle}>
-              <div style={cardHeadStyle}>
-                Early Departures ({earlyDepartures.length})
-              </div>
-              {earlyDepartures.length === 0
-                ? <div style={{ padding: 32, textAlign: "center", color: "#9ca3af" }}>
-                    No flags in this window
-                  </div>
-                : (
-                  <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                      <thead>
-                        <tr style={{ background: "#f9fafb", borderBottom: "2px solid #e5e7eb" }}>
-                          {["Date", "Client", "Center", "Trip Units", "Service Units"].map(h => (
-                            <th key={h} style={thStyle}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {earlyDepartures.map((r, i) => (
-                          <tr key={i} style={{ borderBottom: "1px solid #f3f4f6" }}
-                            onMouseEnter={ev => ev.currentTarget.style.background = "#faf5ff"}
-                            onMouseLeave={ev => ev.currentTarget.style.background = ""}>
-                            <td style={tdStyle}>{r.attendance_date}</td>
-                            <td style={{ ...tdStyle, fontWeight: 500 }}>{r.client_name}</td>
-                            <td style={tdStyle}>{r.cost_center}</td>
-                            <td style={tdStyle}>{Number(r.trip_units)}</td>
-                            <td style={tdStyle}>{Number(r.service_units)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-            </div>
-          </div>
-        );
-      })()}
     </div>
   );
 }
-
-// ── Shared styles ─────────────────────────────────────────────────────────────
-const cardStyle = {
-  background: "#fff", borderRadius: 12, overflow: "hidden",
-  boxShadow: "0 1px 3px rgba(0,0,0,0.08)", border: "1px solid #f3f4f6",
-};
-const cardHeadStyle = {
-  padding: "16px 20px", fontWeight: 600, fontSize: 15, color: "#374151",
-  borderBottom: "1px solid #f3f4f6",
-};
-const thStyle = {
-  padding: "10px 16px", textAlign: "left", fontSize: 12,
-  fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em",
-};
-const tdStyle = {
-  padding: "11px 16px", color: "#374151",
-};
-const inputStyle = {
-  padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db",
-  fontSize: 13, color: "#374151", background: "#fff",
-};
-const btnStyle = {
-  padding: "6px 14px", borderRadius: 6,
-  background: "#1a2d4d", color: "#fff", border: "none",
-  fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
-};
