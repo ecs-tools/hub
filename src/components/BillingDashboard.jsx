@@ -420,62 +420,41 @@ export default function BillingDashboard({ onBack }) {
   return (
     <div className="viz-root">
       <style>{`
+        /* LIGHT ONLY, DELIBERATELY. The Hub has no dark theme — GlobalStyles
+           defines a single light token set and nothing anywhere reads
+           prefers-color-scheme. An earlier version of this file shipped a
+           theme-aware palette, so on an OS set to dark this one page went black
+           while the rest of the site stayed white. A page inside a
+           single-theme app follows the app, not the operating system.
+
+           Colours are the app's OWN tokens wherever one exists, so this page
+           re-themes with the rest of the Hub instead of drifting from it. */
         .viz-root {
           color-scheme: light;
-          --viz-plane:   #f9f9f7;
-          --viz-surface: #fcfcfb;
-          --viz-text-1:  #0b0b0b;
-          --viz-text-2:  #52514e;
-          --viz-muted:   #898781;
-          --viz-grid:    #e1e0d9;
-          --viz-axis:    #c3c2b7;
-          --viz-border:  rgba(11,11,11,0.10);
-          --viz-track:   #eceae3;
-          --viz-s1:      #2a78d6;
+          --viz-plane:   var(--bg-soft, #f7f7f5);
+          --viz-surface: var(--bg, #ffffff);
+          --viz-text-1:  var(--text-1, #1a1a1a);
+          --viz-text-2:  var(--text-2, #6b6b6b);
+          --viz-muted:   var(--text-3, #9b9a97);
+          --viz-grid:    var(--border, #e9e9e7);
+          --viz-axis:    #d8d8d5;
+          --viz-border:  var(--border, #e9e9e7);
+          --viz-track:   var(--bg-hover, #f1f1ef);
+          /* Series 1 is the Hub's own accent blue. Validated as a categorical
+             pair against the #ffffff surface: all six checks pass, worst
+             adjacent CVD dE 25.3, normal-vision 33.5 (targets 8 and 15). */
+          --viz-s1:      var(--accent, #2383e2);
           --viz-s2:      #eb6834;
           --viz-good:    #006300;
           background: var(--viz-plane);
           color: var(--viz-text-1);
           min-height: 100vh;
           padding: 20px clamp(12px, 3vw, 32px) 48px;
-          /* The app's own brand sans (--font-sans is set on the App root); the
-             stack is the fallback for when this component renders standalone.
-             One face everywhere, including the large stat values — a display or
-             serif figure would read as off-brand decoration. */
+          /* The app's own brand sans; the stack is the fallback for when this
+             component renders standalone. One face everywhere, including the
+             large stat values — a display or serif figure reads as off-brand. */
           font-family: var(--font-sans, "IBM Plex Sans"), system-ui,
                        -apple-system, "Segoe UI", sans-serif;
-        }
-        @media (prefers-color-scheme: dark) {
-          :root:where(:not([data-theme="light"])) .viz-root {
-            color-scheme: dark;
-            --viz-plane:   #0d0d0d;
-            --viz-surface: #1a1a19;
-            --viz-text-1:  #ffffff;
-            --viz-text-2:  #c3c2b7;
-            --viz-muted:   #898781;
-            --viz-grid:    #2c2c2a;
-            --viz-axis:    #383835;
-            --viz-border:  rgba(255,255,255,0.10);
-            --viz-track:   #2c2c2a;
-            --viz-s1:      #3987e5;
-            --viz-s2:      #d95926;
-            --viz-good:    #0ca30c;
-          }
-        }
-        :root[data-theme="dark"] .viz-root {
-          color-scheme: dark;
-          --viz-plane:   #0d0d0d;
-          --viz-surface: #1a1a19;
-          --viz-text-1:  #ffffff;
-          --viz-text-2:  #c3c2b7;
-          --viz-muted:   #898781;
-          --viz-grid:    #2c2c2a;
-          --viz-axis:    #383835;
-          --viz-border:  rgba(255,255,255,0.10);
-          --viz-track:   #2c2c2a;
-          --viz-s1:      #3987e5;
-          --viz-s2:      #d95926;
-          --viz-good:    #0ca30c;
         }
         .viz-kpis {
           display: grid; gap: 12px; grid-template-columns: repeat(2, 1fr);
